@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vatfilingpricingtool
+  labels:
+    name: vatfilingpricingtool
+    environment: ${ENVIRONMENT}
+    app: vatfilingpricingtool
+  annotations:
+    description: "Namespace for VAT Filing Pricing Tool application"
+    owner: "DevOps Team"
