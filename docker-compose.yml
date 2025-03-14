@@ -1,0 +1,144 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: ./src/backend
+      dockerfile: Dockerfile
+      args:
+        ASPNETCORE_ENVIRONMENT: Development
+    ports:
+      - "5000:80"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__DefaultConnection=Server=sql-server;Database=VatFilingPricingTool;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True
+      - ConnectionStrings__CosmosDb=mongodb://mongodb:27017
+      - ConnectionStrings__Redis=redis:6379,abortConnect=false
+      - Storage__ConnectionString=DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;
+      - Storage__CreateContainersIfNotExist=true
+      - Storage__ReportsContainerName=reports
+      - Storage__TemplatesContainerName=templates
+      - Storage__DocumentsContainerName=documents
+      - Cache__Enabled=true
+      - Cache__ConnectionString=redis:6379
+      - Cache__InstanceName=VatFilingPricingTool
+      - Cache__DefaultExpirationMinutes=30
+      - Logging__LogLevel__Default=Information
+      - Logging__LogLevel__Microsoft=Warning
+      - Logging__LogLevel__Microsoft.Hosting.Lifetime=Information
+    depends_on:
+      - sql-server
+      - redis
+      - azurite
+      - mongodb
+    networks:
+      - vat-filing-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health/live", "||", "exit", "1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    volumes:
+      - ./src/backend:/src:ro
+      - api-logs:/app/logs
+
+  web:
+    build:
+      context: ./src/web
+      dockerfile: Dockerfile
+      args:
+        ASPNETCORE_ENVIRONMENT: Development
+    ports:
+      - "8080:80"
+    environment:
+      - API_BASE_URL=http://api
+    depends_on:
+      - api
+    networks:
+      - vat-filing-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    volumes:
+      - ./src/web:/src:ro
+
+  sql-server:
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=YourStrong!Passw0rd
+      - MSSQL_PID=Developer
+    ports:
+      - "1433:1433"
+    networks:
+      - vat-filing-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["/opt/mssql-tools/bin/sqlcmd", "-S", "localhost", "-U", "sa", "-P", "YourStrong!Passw0rd", "-Q", "SELECT 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - sql-data:/var/opt/mssql
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - vat-filing-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    ports:
+      - "10000:10000"
+      - "10001:10001"
+      - "10002:10002"
+    networks:
+      - vat-filing-network
+    restart: unless-stopped
+    volumes:
+      - azurite-data:/data
+
+  mongodb:
+    image: mongo:5.0
+    ports:
+      - "27017:27017"
+    networks:
+      - vat-filing-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    volumes:
+      - mongodb-data:/data/db
+
+networks:
+  vat-filing-network:
+    driver: bridge
+
+volumes:
+  sql-data:
+  redis-data:
+  azurite-data:
+  mongodb-data:
+  api-logs:
