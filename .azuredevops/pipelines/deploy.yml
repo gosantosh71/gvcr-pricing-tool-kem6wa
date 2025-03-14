@@ -1,0 +1,130 @@
+# Azure DevOps pipeline for deploying the VAT Filing Pricing Tool to various environments
+name: $(Build.SourceBranchName)-$(Date:yyyyMMdd)$(Rev:.r)
+
+# Manual trigger only - no automatic triggers
+trigger: none
+
+# Reference the build pipeline as a resource
+resources:
+  pipelines:
+    - pipeline: Build
+      source: VatFilingPricingTool-Build
+      trigger:
+        branches:
+          include:
+            - main
+            - develop
+
+# Common variables used across all stages
+variables:
+  vmImageName: 'ubuntu-latest'
+  terraformVersion: '1.0.11'
+  terraformBackendResourceGroup: '$(TERRAFORM_BACKEND_RG)'
+  terraformBackendStorageAccount: '$(TERRAFORM_BACKEND_SA)'
+  terraformBackendContainer: 'tfstate'
+  terraformBackendKey: 'vatfilingpricingtool.tfstate'
+  acrName: '$(ACR_NAME)'
+  backendImageName: 'vatfilingpricingtool-backend'
+  webImageName: 'vatfilingpricingtool-web'
+
+stages:
+  # Development Stage - deploys to dev environment from develop branch
+  - stage: DeployToDev
+    displayName: 'Deploy to Development'
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
+    jobs:
+      - job: DeployDev
+        displayName: 'Deploy to Development Environment'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - template: templates/deploy-template.yml
+            parameters:
+              environment: 'dev'
+              azureSubscription: '$(AZURE_SUBSCRIPTION)'
+              keyVaultName: '$(KEYVAULT_NAME)'
+              acrName: '$(acrName)'
+              terraformBackendResourceGroup: '$(terraformBackendResourceGroup)'
+              terraformBackendStorageAccount: '$(terraformBackendStorageAccount)'
+              terraformBackendContainer: '$(terraformBackendContainer)'
+              terraformBackendKey: '$(terraformBackendKey)'
+              terraformVersion: '$(terraformVersion)'
+              terraformVarFile: 'environments/dev/terraform.tfvars'
+              backendImageName: '$(backendImageName)'
+              webImageName: '$(webImageName)'
+              buildId: '$(resources.pipeline.Build.runID)'
+              deploymentStrategy: 'rolling'
+              requireApproval: false
+              runValidation: true
+
+  # Staging Stage - deploys to staging environment from main branch
+  - stage: DeployToStaging
+    displayName: 'Deploy to Staging'
+    dependsOn: [] # No dependencies, can run independently
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: DeployStaging
+        displayName: 'Deploy to Staging Environment'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - template: templates/deploy-template.yml
+            parameters:
+              environment: 'staging'
+              azureSubscription: '$(AZURE_SUBSCRIPTION)'
+              keyVaultName: '$(KEYVAULT_NAME)'
+              acrName: '$(acrName)'
+              terraformBackendResourceGroup: '$(terraformBackendResourceGroup)'
+              terraformBackendStorageAccount: '$(terraformBackendStorageAccount)'
+              terraformBackendContainer: '$(terraformBackendContainer)'
+              terraformBackendKey: '$(terraformBackendKey)'
+              terraformVersion: '$(terraformVersion)'
+              terraformVarFile: 'environments/staging/terraform.tfvars'
+              backendImageName: '$(backendImageName)'
+              webImageName: '$(webImageName)'
+              buildId: '$(resources.pipeline.Build.runID)'
+              deploymentStrategy: 'canary'
+              canaryPercentage: '20'
+              requireApproval: true
+              approvalTimeoutInMinutes: 1440
+              approvalNotificationEmails: '$(STAGING_APPROVAL_EMAILS)'
+              runValidation: true
+
+  # Production Stage - deploys to production environment from main branch, after staging deployment
+  - stage: DeployToProduction
+    displayName: 'Deploy to Production'
+    dependsOn: ['DeployToStaging']
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: DeployProduction
+        displayName: 'Deploy to Production Environment'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: ManualValidation@0
+            displayName: 'Approve Production Deployment'
+            inputs:
+              notifyUsers: '$(PROD_APPROVAL_EMAILS)'
+              instructions: 'Please validate the staging deployment and approve the production deployment.'
+              timeoutInMinutes: 4320
+          
+          - template: templates/deploy-template.yml
+            parameters:
+              environment: 'prod'
+              azureSubscription: '$(AZURE_SUBSCRIPTION)'
+              keyVaultName: '$(KEYVAULT_NAME)'
+              acrName: '$(acrName)'
+              terraformBackendResourceGroup: '$(terraformBackendResourceGroup)'
+              terraformBackendStorageAccount: '$(terraformBackendStorageAccount)'
+              terraformBackendContainer: '$(terraformBackendContainer)'
+              terraformBackendKey: '$(terraformBackendKey)'
+              terraformVersion: '$(terraformVersion)'
+              terraformVarFile: 'environments/prod/terraform.tfvars'
+              backendImageName: '$(backendImageName)'
+              webImageName: '$(webImageName)'
+              buildId: '$(resources.pipeline.Build.runID)'
+              deploymentStrategy: 'blueGreen'
+              requireApproval: true
+              approvalTimeoutInMinutes: 4320
+              approvalNotificationEmails: '$(PROD_APPROVAL_EMAILS)'
+              runValidation: true
