@@ -1,0 +1,71 @@
+bin/
+obj/
+dist/
+publish/
+wwwroot/dist/
+
+# Node.js dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+
+# User-specific files
+*.user
+*.userosscache
+*.suo
+*.userprefs
+.vs/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Environment-specific files
+appsettings.Development.local.json
+appsettings.Production.local.json
+appsettings.local.json
+*.local.json
+
+# Blazor WebAssembly specific
+_framework/
+wwwroot/_framework/
+wwwroot/service-worker-assets.js
+wwwroot/service-worker.js
+*.blazor.config
+
+# Compiled files
+*.com
+*.class
+*.dll
+*.exe
+*.pdb
+*.dll.config
+*.cache
+
+# Logs and databases
+*.log
+*.sqlite
+*.sqlite3
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Test results
+TestResults/
+[Cc]overage/
+coverage.*
+
+# Temporary files
+*~
+*.swp
+*.swo
+tmp/
+temp/
