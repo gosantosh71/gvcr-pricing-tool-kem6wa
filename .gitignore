@@ -1,0 +1,108 @@
+bin/
+obj/
+out/
+
+# Visual Studio files
+.vs/
+*.user
+*.userosscache
+*.suo
+*.userprefs
+*.dbmdl
+*.jfm
+*.pfx
+*.publishsettings
+
+# Rider files
+.idea/
+*.sln.iml
+
+# VS Code files
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Node.js dependencies
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+build/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+msbuild.log
+msbuild.err
+msbuild.wrn
+
+# Azure Functions artifacts
+local.settings.json
+
+# User-specific files
+*.rsuser
+
+# NuGet packages
+*.nupkg
+# NuGet Symbol Packages
+*.snupkg
+# The packages folder can be ignored because of Package Restore
+**/[Pp]ackages/*
+# except build/, which is used as an MSBuild target.
+!**/[Pp]ackages/build/
+
+# Blazor WebAssembly
+**/wwwroot/dist/
+
+# Local development settings
+appsettings.Development.json
+appsettings.Local.json
+
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+
+# Kubernetes
+kubeconfig
+
+# Secrets
+*.key
+*.pem
+*.env
+secrets.json
+
+# Test results
+TestResults/
+[Cc]overage/
+coverage.json
+coverage.info
+coverage.xml
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*~
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+
+# Logs
+logs/
+*.log
