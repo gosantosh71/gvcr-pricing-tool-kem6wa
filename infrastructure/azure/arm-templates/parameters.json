@@ -1,0 +1,119 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "environmentName": {
+            "value": "dev"
+        },
+        "location": {
+            "value": "westeurope"
+        },
+        "secondaryLocation": {
+            "value": "northeurope"
+        },
+        "appName": {
+            "value": "vatfilingpricingtool"
+        },
+        "sqlAdminLogin": {
+            "value": "sqladmin"
+        },
+        "sqlAdminPassword": {
+            "reference": {
+                "keyVault": {
+                    "id": "/subscriptions/{subscription-id}/resourceGroups/{resource-group}/providers/Microsoft.KeyVault/vaults/{keyvault-name}"
+                },
+                "secretName": "SqlAdminPassword"
+            }
+        },
+        "keyVaultAccessPolicies": {
+            "value": [
+                {
+                    "objectId": "00000000-0000-0000-0000-000000000000",
+                    "tenantId": "[subscription().tenantId]",
+                    "permissions": {
+                        "keys": [
+                            "Get",
+                            "List",
+                            "Update",
+                            "Create",
+                            "Import",
+                            "Delete",
+                            "Recover",
+                            "Backup",
+                            "Restore"
+                        ],
+                        "secrets": [
+                            "Get",
+                            "List",
+                            "Set",
+                            "Delete",
+                            "Recover",
+                            "Backup",
+                            "Restore"
+                        ],
+                        "certificates": [
+                            "Get",
+                            "List",
+                            "Update",
+                            "Create",
+                            "Import",
+                            "Delete",
+                            "Recover",
+                            "Backup",
+                            "Restore"
+                        ]
+                    }
+                }
+            ]
+        },
+        "appServicePlanSku": {
+            "value": {
+                "name": "P2v3",
+                "tier": "PremiumV3",
+                "size": "P2v3",
+                "family": "Pv3",
+                "capacity": 1
+            }
+        },
+        "aksNodeCount": {
+            "value": 3
+        },
+        "aksNodeSize": {
+            "value": "Standard_D4s_v3"
+        },
+        "sqlDatabaseSku": {
+            "value": {
+                "name": "BC_Gen5_8",
+                "tier": "BusinessCritical",
+                "family": "Gen5",
+                "capacity": 8
+            }
+        },
+        "cosmosThroughput": {
+            "value": 400
+        },
+        "redisCacheSku": {
+            "value": {
+                "name": "Premium",
+                "family": "P",
+                "capacity": 1
+            }
+        },
+        "storageAccountType": {
+            "value": "Standard_GRS"
+        },
+        "apiManagementSku": {
+            "value": "Standard"
+        },
+        "tags": {
+            "value": {
+                "Environment": "dev",
+                "Application": "VAT Filing Pricing Tool",
+                "Owner": "Finance Department",
+                "CostCenter": "Finance-IT",
+                "Project": "VAT Filing Pricing Tool",
+                "Compliance": "GDPR, SOC2, ISO27001"
+            }
+        }
+    }
+}
