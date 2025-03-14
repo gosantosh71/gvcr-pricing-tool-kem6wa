@@ -1,0 +1,394 @@
+name: Backend Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+        default: 'development'
+      imageTag:
+        description: 'Docker image tag to deploy'
+        required: false
+        type: string
+      deploymentStrategy:
+        description: 'Deployment strategy to use'
+        required: true
+        type: choice
+        options:
+          - rolling
+          - canary
+          - blueGreen
+        default: 'rolling'
+  workflow_run:
+    workflows: ["Backend Build and Test"]
+    branches: [main, develop]
+    types:
+      - completed
+
+env:
+  ACR_NAME: vatfilingpricingtoolacr
+  IMAGE_NAME: vatfilingpricingtool-backend
+  RESOURCE_GROUP_PREFIX: vatfilingpricingtool
+  NAMESPACE: vatfilingpricingtool
+  AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+
+jobs:
+  deploy_development:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.ref == 'refs/heads/develop' || github.event.inputs.environment == 'development'
+    environment:
+      name: development
+      url: https://dev-api.vatfilingpricingtool.com
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set environment variables
+        run: |
+          echo "ENVIRONMENT=development" >> $GITHUB_ENV
+          echo "AKS_CLUSTER_NAME=${RESOURCE_GROUP_PREFIX}-dev-aks" >> $GITHUB_ENV
+          echo "RESOURCE_GROUP=${RESOURCE_GROUP_PREFIX}-dev-rg" >> $GITHUB_ENV
+
+      - name: Get image tag
+        run: |
+          if [[ -n "${{ github.event.inputs.imageTag }}" ]]; then
+            echo "IMAGE_TAG=${{ github.event.inputs.imageTag }}" >> $GITHUB_ENV
+          else
+            echo "IMAGE_TAG=develop-latest" >> $GITHUB_ENV
+          fi
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name: ${{ env.AKS_CLUSTER_NAME }}
+
+      - name: Create namespace if not exists
+        run: kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Create image pull secret
+        run: kubectl create secret docker-registry acr-auth --docker-server=${{ env.ACR_NAME }}.azurecr.io --docker-username=${{ secrets.ACR_USERNAME }} --docker-password=${{ secrets.ACR_PASSWORD }} -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy backend config and secrets
+        uses: azure/k8s-deploy@v4
+        with:
+          namespace: ${{ env.NAMESPACE }}
+          manifests: infrastructure/kubernetes/backend/config.yaml,infrastructure/kubernetes/backend/secrets.yaml
+          images: ''
+          strategy: none
+
+      - name: Bake deployment manifests
+        uses: azure/k8s-bake@v2
+        with:
+          renderEngine: helm
+          helmChart: infrastructure/helm/vatfilingpricingtool
+          overrideFiles: infrastructure/helm/vatfilingpricingtool/values.yaml
+          overrides: environment=${{ env.ENVIRONMENT }},image.repository=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }},image.tag=${{ env.IMAGE_TAG }},deploymentStrategy=${{ github.event.inputs.deploymentStrategy || 'rolling' }}
+          releaseName: vatfilingpricingtool-backend
+        id: bake
+
+      - name: Deploy backend application
+        uses: azure/k8s-deploy@v4
+        with:
+          namespace: ${{ env.NAMESPACE }}
+          manifests: ${{ steps.bake.outputs.manifestsBundle }}
+          images: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          strategy: ${{ github.event.inputs.deploymentStrategy || 'rolling' }}
+          traffic-split-method: ${{ github.event.inputs.deploymentStrategy == 'canary' && 'pod' || 'service' }}
+          percentage: ${{ github.event.inputs.deploymentStrategy == 'canary' && '20' || '100' }}
+
+      - name: Verify deployment
+        run: kubectl rollout status deployment/vatfilingpricingtool-api -n ${{ env.NAMESPACE }} --timeout=300s
+
+      - name: Run health checks
+        run: |
+          # Get the application URL
+          APP_URL=$(az aks show -g ${{ env.RESOURCE_GROUP }} -n ${{ env.AKS_CLUSTER_NAME }} --query addonProfiles.httpApplicationRouting.config.HTTPApplicationRoutingZoneName -o tsv)
+          echo "Application URL: $APP_URL"
+
+          # Check backend health endpoint
+          BACKEND_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" https://api.$APP_URL/health/ready)
+          echo "Backend health status: $BACKEND_HEALTH"
+          if [ "$BACKEND_HEALTH" != "200" ]; then
+            echo "Backend health check failed"
+            exit 1
+          fi
+
+          echo "Deployment validation successful"
+
+  deploy_staging:
+    runs-on: ubuntu-latest
+    needs: [deploy_development]
+    if: github.event.inputs.environment == 'staging' || github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.ref == 'refs/heads/main'
+    environment:
+      name: staging
+      url: https://staging-api.vatfilingpricingtool.com
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set environment variables
+        run: |
+          echo "ENVIRONMENT=staging" >> $GITHUB_ENV
+          echo "AKS_CLUSTER_NAME=${RESOURCE_GROUP_PREFIX}-staging-aks" >> $GITHUB_ENV
+          echo "RESOURCE_GROUP=${RESOURCE_GROUP_PREFIX}-staging-rg" >> $GITHUB_ENV
+
+      - name: Get image tag
+        run: |
+          if [[ -n "${{ github.event.inputs.imageTag }}" ]]; then
+            echo "IMAGE_TAG=${{ github.event.inputs.imageTag }}" >> $GITHUB_ENV
+          else
+            echo "IMAGE_TAG=main-latest" >> $GITHUB_ENV
+          fi
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name: ${{ env.AKS_CLUSTER_NAME }}
+
+      - name: Create namespace if not exists
+        run: kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Create image pull secret
+        run: kubectl create secret docker-registry acr-auth --docker-server=${{ env.ACR_NAME }}.azurecr.io --docker-username=${{ secrets.ACR_USERNAME }} --docker-password=${{ secrets.ACR_PASSWORD }} -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy backend config and secrets
+        uses: azure/k8s-deploy@v4
+        with:
+          namespace: ${{ env.NAMESPACE }}
+          manifests: infrastructure/kubernetes/backend/config.yaml,infrastructure/kubernetes/backend/secrets.yaml
+          images: ''
+          strategy: none
+
+      - name: Bake deployment manifests
+        uses: azure/k8s-bake@v2
+        with:
+          renderEngine: helm
+          helmChart: infrastructure/helm/vatfilingpricingtool
+          overrideFiles: infrastructure/helm/vatfilingpricingtool/values.yaml
+          overrides: environment=${{ env.ENVIRONMENT }},image.repository=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }},image.tag=${{ env.IMAGE_TAG }},deploymentStrategy=${{ github.event.inputs.deploymentStrategy || 'canary' }}
+          releaseName: vatfilingpricingtool-backend
+        id: bake
+
+      - name: Deploy backend application
+        uses: azure/k8s-deploy@v4
+        with:
+          namespace: ${{ env.NAMESPACE }}
+          manifests: ${{ steps.bake.outputs.manifestsBundle }}
+          images: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          strategy: ${{ github.event.inputs.deploymentStrategy || 'canary' }}
+          traffic-split-method: ${{ github.event.inputs.deploymentStrategy == 'canary' && 'pod' || 'service' }}
+          percentage: ${{ github.event.inputs.deploymentStrategy == 'canary' && '20' || '100' }}
+
+      - name: Verify deployment
+        run: kubectl rollout status deployment/vatfilingpricingtool-api -n ${{ env.NAMESPACE }} --timeout=300s
+
+      - name: Run health checks
+        run: |
+          # Get the application URL
+          APP_URL=$(az aks show -g ${{ env.RESOURCE_GROUP }} -n ${{ env.AKS_CLUSTER_NAME }} --query addonProfiles.httpApplicationRouting.config.HTTPApplicationRoutingZoneName -o tsv)
+          echo "Application URL: $APP_URL"
+
+          # Check backend health endpoint
+          BACKEND_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" https://api.$APP_URL/health/ready)
+          echo "Backend health status: $BACKEND_HEALTH"
+          if [ "$BACKEND_HEALTH" != "200" ]; then
+            echo "Backend health check failed"
+            exit 1
+          fi
+
+          echo "Deployment validation successful"
+
+      - name: Run integration tests
+        run: |
+          # Get the application URL
+          APP_URL=$(az aks show -g ${{ env.RESOURCE_GROUP }} -n ${{ env.AKS_CLUSTER_NAME }} --query addonProfiles.httpApplicationRouting.config.HTTPApplicationRoutingZoneName -o tsv)
+          echo "Application URL: $APP_URL"
+
+          # Run staging tests
+          dotnet test src/backend/Tests/VatFilingPricingTool.IntegrationTests/VatFilingPricingTool.IntegrationTests.csproj --filter Category=StagingTests -- TestRunParameters.Parameter\(name=\"ApiBaseUrl\", value=\"https://api.$APP_URL\"\)
+
+      - name: Promote canary deployment
+        if: github.event.inputs.deploymentStrategy == 'canary' || github.event.inputs.deploymentStrategy == ''
+        run: |
+          # Monitor deployment for 5 minutes
+          echo "Monitoring canary deployment for 5 minutes before promotion"
+          sleep 300
+
+          # Check error rate in Application Insights
+          ERROR_RATE=$(az monitor app-insights query --app $(APPINSIGHTS_ID) --analytics-query "requests | where timestamp > ago(5m) | summarize ErrorRate=sum(success == 'False') * 1.0 / count()" --query "[0].ErrorRate" -o tsv)
+
+          if (( $(echo "$ERROR_RATE > 0.01" | bc -l) )); then
+            echo "Error rate too high: $ERROR_RATE > 0.01"
+            exit 1
+          fi
+
+          # Promote canary to 100%
+          echo "Promoting canary deployment to 100%"
+          kubectl -n ${{ env.NAMESPACE }} patch deployment vatfilingpricingtool-api -p '{"spec":{"strategy":{"canary":{"steps":[{"setWeight": 100}]}}}}'
+
+  deploy_production:
+    runs-on: ubuntu-latest
+    needs: [deploy_staging]
+    if: github.event.inputs.environment == 'production'
+    environment:
+      name: production
+      url: https://api.vatfilingpricingtool.com
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set environment variables
+        run: |
+          echo "ENVIRONMENT=production" >> $GITHUB_ENV
+          echo "AKS_CLUSTER_NAME=${RESOURCE_GROUP_PREFIX}-prod-aks" >> $GITHUB_ENV
+          echo "RESOURCE_GROUP=${RESOURCE_GROUP_PREFIX}-prod-rg" >> $GITHUB_ENV
+
+      - name: Get image tag
+        run: |
+          if [[ -n "${{ github.event.inputs.imageTag }}" ]]; then
+            echo "IMAGE_TAG=${{ github.event.inputs.imageTag }}" >> $GITHUB_ENV
+          else
+            echo "IMAGE_TAG=main-latest" >> $GITHUB_ENV
+          fi
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name: ${{ env.AKS_CLUSTER_NAME }}
+
+      - name: Create namespace if not exists
+        run: kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Create image pull secret
+        run: kubectl create secret docker-registry acr-auth --docker-server=${{ env.ACR_NAME }}.azurecr.io --docker-username=${{ secrets.ACR_USERNAME }} --docker-password=${{ secrets.ACR_PASSWORD }} -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy backend config and secrets
+        uses: azure/k8s-deploy@v4
+        with:
+          namespace: ${{ env.NAMESPACE }}
+          manifests: infrastructure/kubernetes/backend/config.yaml,infrastructure/kubernetes/backend/secrets.yaml
+          images: ''
+          strategy: none
+
+      - name: Bake deployment manifests
+        uses: azure/k8s-bake@v2
+        with:
+          renderEngine: helm
+          helmChart: infrastructure/helm/vatfilingpricingtool
+          overrideFiles: infrastructure/helm/vatfilingpricingtool/values.yaml
+          overrides: environment=${{ env.ENVIRONMENT }},image.repository=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }},image.tag=${{ env.IMAGE_TAG }},deploymentStrategy=${{ github.event.inputs.deploymentStrategy || 'blueGreen' }}
+          releaseName: vatfilingpricingtool-backend
+        id: bake
+
+      - name: Deploy backend application
+        uses: azure/k8s-deploy@v4
+        with:
+          namespace: ${{ env.NAMESPACE }}
+          manifests: ${{ steps.bake.outputs.manifestsBundle }}
+          images: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          strategy: ${{ github.event.inputs.deploymentStrategy || 'blueGreen' }}
+          traffic-split-method: service
+          percentage: '0'
+
+      - name: Verify deployment
+        run: kubectl rollout status deployment/vatfilingpricingtool-api -n ${{ env.NAMESPACE }} --timeout=300s
+
+      - name: Run smoke tests
+        run: |
+          # Get the application URL
+          APP_URL=$(az aks show -g ${{ env.RESOURCE_GROUP }} -n ${{ env.AKS_CLUSTER_NAME }} --query addonProfiles.httpApplicationRouting.config.HTTPApplicationRoutingZoneName -o tsv)
+          echo "Application URL: $APP_URL"
+
+          # Run smoke tests against the new deployment (not yet receiving production traffic)
+          NEW_VERSION=$(kubectl get deployment vatfilingpricingtool-api -n ${{ env.NAMESPACE }} -o jsonpath='{.metadata.labels.version}')
+          TEST_URL="https://api-$NEW_VERSION.$APP_URL"
+
+          # Run smoke tests
+          dotnet test src/backend/Tests/VatFilingPricingTool.IntegrationTests/VatFilingPricingTool.IntegrationTests.csproj --filter Category=SmokeTests -- TestRunParameters.Parameter\(name=\"ApiBaseUrl\", value=\"$TEST_URL\"\)
+
+      - name: Switch traffic to new version
+        run: |
+          # Switch traffic to new version
+          kubectl -n ${{ env.NAMESPACE }} patch service vatfilingpricingtool-api -p '{"spec":{"selector":{"version":"'$(kubectl get deployment vatfilingpricingtool-api -n ${{ env.NAMESPACE }} -o jsonpath='{.metadata.labels.version}')'""}}}'
+
+      - name: Run health checks
+        run: |
+          # Get the application URL
+          APP_URL=$(az aks show -g ${{ env.RESOURCE_GROUP }} -n ${{ env.AKS_CLUSTER_NAME }} --query addonProfiles.httpApplicationRouting.config.HTTPApplicationRoutingZoneName -o tsv)
+          echo "Application URL: $APP_URL"
+
+          # Check backend health endpoint
+          BACKEND_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" https://api.$APP_URL/health/ready)
+          echo "Backend health status: $BACKEND_HEALTH"
+          if [ "$BACKEND_HEALTH" != "200" ]; then
+            echo "Backend health check failed"
+            exit 1
+          fi
+
+          echo "Deployment validation successful"
+
+      - name: Monitor production deployment
+        run: |
+          # Monitor deployment for 15 minutes
+          echo "Monitoring production deployment for 15 minutes"
+
+          START_TIME=$(date +%s)
+          END_TIME=$((START_TIME + 900))
+          ERROR_THRESHOLD=0.01 # 1% error rate threshold
+
+          while [ $(date +%s) -lt $END_TIME ]; do
+              # Check error rate in Application Insights
+              ERROR_RATE=$(az monitor app-insights query --app $(APPINSIGHTS_ID) --analytics-query "requests | where timestamp > ago(5m) | summarize ErrorRate=sum(success == 'False') * 1.0 / count()" --query "[0].ErrorRate" -o tsv)
+              
+              echo "Current error rate: $ERROR_RATE"
+              
+              if (( $(echo "$ERROR_RATE > $ERROR_THRESHOLD" | bc -l) )); then
+                  echo "Error rate exceeds threshold: $ERROR_RATE > $ERROR_THRESHOLD"
+                  echo "Rolling back deployment"
+                  kubectl -n ${{ env.NAMESPACE }} rollout undo deployment/vatfilingpricingtool-api
+                  exit 1
+              fi
+              
+              # Wait 30 seconds before checking again
+              sleep 30
+          done
+
+          echo "Deployment monitoring completed successfully."
+
+      - name: Send deployment notification
+        run: |
+          # Send deployment notification
+          DEPLOYMENT_INFO="Version: ${{ env.IMAGE_TAG }}\nEnvironment: ${{ env.ENVIRONMENT }}\nDeployment Time: $(date)\nDeployed By: ${{ github.actor }}"
+
+          # Send to Teams webhook if configured
+          if [ -n "${{ secrets.TEAMS_WEBHOOK_URL }}" ]; then
+              curl -H "Content-Type: application/json" -d '{"text":"Backend Deployment Completed Successfully\n'"$DEPLOYMENT_INFO"'"}' ${{ secrets.TEAMS_WEBHOOK_URL }}
+          fi
+
+          # Log deployment information
+          echo "Deployment completed successfully:"
+          echo "$DEPLOYMENT_INFO"
