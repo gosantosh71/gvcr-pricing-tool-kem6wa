@@ -1,0 +1,235 @@
+name: Web Frontend Deployment
+
+on:
+  workflow_run:
+    workflows: ["Build Web Application"]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options: ['development', 'staging', 'production']
+        default: 'development'
+      version:
+        description: 'Version to deploy (defaults to latest)'
+        required: false
+        type: string
+
+env:
+  ACR_NAME: vatfilingpricingtoolacr
+  AKS_RESOURCE_GROUP: vatfilingpricingtool-rg
+  AKS_CLUSTER_NAME: vatfilingpricingtool-aks
+  NAMESPACE: vatfilingpricingtool
+  DEPLOYMENT_NAME: vatfilingpricingtool-web
+  IMAGE_NAME: vatfilingpricingtool/web
+
+jobs:
+  deploy-development:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'development'
+    environment: development
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set image tag
+        run: echo "IMAGE_TAG=${GITHUB_SHA::8}" >> $GITHUB_ENV
+        if: github.event.inputs.version == ''
+
+      - name: Set custom image tag
+        run: echo "IMAGE_TAG=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+        if: github.event.inputs.version != ''
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: web-build
+          path: web-build
+        if: github.event.workflow_run.conclusion == 'success'
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Login to ACR
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ env.ACR_NAME }}.azurecr.io
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: src/web/Dockerfile
+          push: true
+          tags: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }},${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.AKS_RESOURCE_GROUP }}
+          cluster-name: ${{ env.AKS_CLUSTER_NAME }}
+
+      - name: Create image pull secret
+        uses: azure/k8s-create-secret@v4
+        with:
+          namespace: ${{ env.NAMESPACE }}
+          secret-type: docker-registry
+          secret-name: acr-auth
+          docker-server: ${{ env.ACR_NAME }}.azurecr.io
+          docker-username: ${{ secrets.ACR_USERNAME }}
+          docker-password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Deploy to AKS
+        uses: azure/k8s-deploy@v4
+        with:
+          namespace: ${{ env.NAMESPACE }}
+          manifests: infrastructure/kubernetes/web/deployment.yaml,infrastructure/kubernetes/web/service.yaml,infrastructure/kubernetes/web/ingress.yaml
+          images: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          strategy: blue-green
+          secret-name: acr-auth
+
+      - name: Run smoke tests
+        run: chmod +x ./infrastructure/scripts/smoke-tests.sh && ./infrastructure/scripts/smoke-tests.sh development web
+
+      - name: Update deployment status
+        run: echo "::notice::Deployed web frontend to development environment with image tag ${{ env.IMAGE_TAG }}"
+
+  deploy-staging:
+    name: Deploy to Staging
+    needs: [deploy-development]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging'
+    environment:
+      name: staging
+      url: https://staging.vatfilingpricingtool.com
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set image tag
+        run: echo "IMAGE_TAG=${GITHUB_SHA::8}" >> $GITHUB_ENV
+        if: github.event.inputs.version == ''
+
+      - name: Set custom image tag
+        run: echo "IMAGE_TAG=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+        if: github.event.inputs.version != ''
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.AKS_RESOURCE_GROUP }}
+          cluster-name: ${{ env.AKS_CLUSTER_NAME }}
+
+      - name: Create image pull secret
+        uses: azure/k8s-create-secret@v4
+        with:
+          namespace: ${{ env.NAMESPACE }}-staging
+          secret-type: docker-registry
+          secret-name: acr-auth
+          docker-server: ${{ env.ACR_NAME }}.azurecr.io
+          docker-username: ${{ secrets.ACR_USERNAME }}
+          docker-password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Deploy to AKS
+        uses: azure/k8s-deploy@v4
+        with:
+          namespace: ${{ env.NAMESPACE }}-staging
+          manifests: infrastructure/kubernetes/web/deployment.yaml,infrastructure/kubernetes/web/service.yaml,infrastructure/kubernetes/web/ingress.yaml
+          images: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          strategy: blue-green
+          secret-name: acr-auth
+
+      - name: Run integration tests
+        run: chmod +x ./infrastructure/scripts/integration-tests.sh && ./infrastructure/scripts/integration-tests.sh staging web
+
+      - name: Update deployment status
+        run: echo "::notice::Deployed web frontend to staging environment with image tag ${{ env.IMAGE_TAG }}"
+
+  deploy-production:
+    name: Deploy to Production
+    needs: [deploy-staging]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production'
+    environment:
+      name: production
+      url: https://vatfilingpricingtool.com
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set image tag
+        run: echo "IMAGE_TAG=${GITHUB_SHA::8}" >> $GITHUB_ENV
+        if: github.event.inputs.version == ''
+
+      - name: Set custom image tag
+        run: echo "IMAGE_TAG=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+        if: github.event.inputs.version != ''
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.AKS_RESOURCE_GROUP }}
+          cluster-name: ${{ env.AKS_CLUSTER_NAME }}
+
+      - name: Create image pull secret
+        uses: azure/k8s-create-secret@v4
+        with:
+          namespace: ${{ env.NAMESPACE }}-production
+          secret-type: docker-registry
+          secret-name: acr-auth
+          docker-server: ${{ env.ACR_NAME }}.azurecr.io
+          docker-username: ${{ secrets.ACR_USERNAME }}
+          docker-password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Deploy to AKS (Canary)
+        uses: azure/k8s-deploy@v4
+        with:
+          namespace: ${{ env.NAMESPACE }}-production
+          manifests: infrastructure/kubernetes/web/deployment.yaml,infrastructure/kubernetes/web/service.yaml,infrastructure/kubernetes/web/ingress.yaml
+          images: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          strategy: canary
+          percentage: 20
+          secret-name: acr-auth
+
+      - name: Run smoke tests on canary
+        run: chmod +x ./infrastructure/scripts/smoke-tests.sh && ./infrastructure/scripts/smoke-tests.sh production-canary web
+
+      - name: Monitor canary deployment
+        run: chmod +x ./infrastructure/scripts/monitor-deployment.sh && ./infrastructure/scripts/monitor-deployment.sh production-canary web 10
+
+      - name: Promote canary to stable
+        uses: azure/k8s-deploy@v4
+        with:
+          namespace: ${{ env.NAMESPACE }}-production
+          manifests: infrastructure/kubernetes/web/deployment.yaml,infrastructure/kubernetes/web/service.yaml,infrastructure/kubernetes/web/ingress.yaml
+          images: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          strategy: canary
+          percentage: 100
+          secret-name: acr-auth
+
+      - name: Run smoke tests on production
+        run: chmod +x ./infrastructure/scripts/smoke-tests.sh && ./infrastructure/scripts/smoke-tests.sh production web
+
+      - name: Create release tag
+        run: git tag -a v$(date +'%Y.%m.%d')-web-${{ env.IMAGE_TAG }} -m "Production web release ${{ env.IMAGE_TAG }}" && git push origin v$(date +'%Y.%m.%d')-web-${{ env.IMAGE_TAG }}
+
+      - name: Update deployment status
+        run: echo "::notice::Deployed web frontend to production environment with image tag ${{ env.IMAGE_TAG }}"
