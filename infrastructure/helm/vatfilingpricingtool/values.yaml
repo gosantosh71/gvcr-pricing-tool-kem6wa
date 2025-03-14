@@ -1,0 +1,431 @@
+# Global settings applied to all components
+global:
+  environment: development
+  imagePullSecrets: []
+  nameOverride: ""
+  fullnameOverride: ""
+
+# Configuration for the backend API component
+backend:
+  enabled: true
+  name: api
+  replicaCount: 3
+  image:
+    repository: vatfilingpricingtool.azurecr.io/backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  ports:
+    http: 80
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  livenessProbe:
+    httpGet:
+      path: /health/live
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /health/ready
+      port: http
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  startupProbe:
+    httpGet:
+      path: /health/startup
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 30
+  env:
+    - name: ASPNETCORE_ENVIRONMENT
+      value: Production
+    - name: ASPNETCORE_URLS
+      value: http://+:80
+    - name: ApplicationInsights__InstrumentationKey
+      valueFrom:
+        secretKeyRef:
+          name: vatfilingpricingtool-secrets
+          key: appinsights-instrumentation-key
+  envFrom: []
+  volumeMounts:
+    - name: api-config
+      mountPath: /app/config
+      readOnly: true
+    - name: logs
+      mountPath: /app/logs
+  volumes:
+    - name: api-config
+      configMap:
+        name: vatfilingpricingtool-api-config
+    - name: logs
+      emptyDir: {}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  nodeSelector: {}
+  tolerations: []
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - api
+            topologyKey: kubernetes.io/hostname
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 50%
+  terminationGracePeriodSeconds: 30
+
+# Configuration for the web frontend component
+web:
+  enabled: true
+  name: web
+  replicaCount: 3
+  image:
+    repository: vatfilingpricingtool.azurecr.io/web
+    tag: latest
+    pullPolicy: IfNotPresent
+  ports:
+    http: 80
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  env:
+    - name: API_URL
+      value: http://vatfilingpricingtool-api
+    - name: AZURE_AD_TENANT_ID
+      valueFrom:
+        secretKeyRef:
+          name: vatfilingpricingtool-secrets
+          key: azure-ad-tenant-id
+    - name: AZURE_AD_CLIENT_ID
+      valueFrom:
+        secretKeyRef:
+          name: vatfilingpricingtool-secrets
+          key: azure-ad-client-id
+  volumeMounts:
+    - name: web-config
+      mountPath: /app/config
+      readOnly: true
+    - name: nginx-config
+      mountPath: /etc/nginx/nginx.conf
+      subPath: nginx.conf
+      readOnly: true
+  volumes:
+    - name: web-config
+      configMap:
+        name: vatfilingpricingtool-web-config
+    - name: nginx-config
+      configMap:
+        name: vatfilingpricingtool-nginx-config
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  nodeSelector: {}
+  tolerations: []
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - web
+            topologyKey: kubernetes.io/hostname
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 50%
+  terminationGracePeriodSeconds: 30
+
+# Service configuration for exposing components
+service:
+  backend:
+    type: ClusterIP
+    port: 80
+    targetPort: 80
+  web:
+    type: ClusterIP
+    port: 80
+    targetPort: 80
+
+# Ingress configuration for external access
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  web:
+    enabled: true
+    hosts:
+      - host: vatfilingpricingtool.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: vatfilingpricingtool-web-tls
+        hosts:
+          - vatfilingpricingtool.example.com
+  backend:
+    enabled: true
+    hosts:
+      - host: api.vatfilingpricingtool.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: vatfilingpricingtool-api-tls
+        hosts:
+          - api.vatfilingpricingtool.example.com
+
+# ConfigMap configuration for application settings
+configMaps:
+  apiConfig:
+    enabled: true
+    data:
+      appsettings.json: |
+        {
+          "Logging": {
+            "LogLevel": {
+              "Default": "Information",
+              "Microsoft": "Warning",
+              "Microsoft.Hosting.Lifetime": "Information"
+            }
+          },
+          "AllowedHosts": "*",
+          "ApplicationInsights": {
+            "EnableAdaptiveSampling": false,
+            "EnablePerformanceCounterCollectionModule": true
+          },
+          "FeatureManagement": {
+            "OCRProcessing": true,
+            "ERPIntegration": true
+          }
+        }
+      countries.json: |
+        [
+          {
+            "countryCode": "GB",
+            "name": "United Kingdom",
+            "standardVatRate": 20.0,
+            "currencyCode": "GBP",
+            "isActive": true
+          },
+          {
+            "countryCode": "DE",
+            "name": "Germany",
+            "standardVatRate": 19.0,
+            "currencyCode": "EUR",
+            "isActive": true
+          },
+          {
+            "countryCode": "FR",
+            "name": "France",
+            "standardVatRate": 20.0,
+            "currencyCode": "EUR",
+            "isActive": true
+          }
+        ]
+  webConfig:
+    enabled: true
+    data:
+      appsettings.json: |
+        {
+          "ApiEndpoint": "https://api.vatfilingpricingtool.example.com",
+          "AzureAd": {
+            "Authority": "https://login.microsoftonline.com/",
+            "ClientId": "${AZURE_AD_CLIENT_ID}",
+            "TenantId": "${AZURE_AD_TENANT_ID}",
+            "ValidateAuthority": true
+          },
+          "FeatureManagement": {
+            "DocumentUpload": true
+          }
+        }
+  nginxConfig:
+    enabled: true
+    data:
+      nginx.conf: |
+        user nginx;
+        worker_processes auto;
+
+        error_log /var/log/nginx/error.log warn;
+        pid /var/run/nginx.pid;
+
+        events {
+          worker_connections 1024;
+        }
+
+        http {
+          include /etc/nginx/mime.types;
+          default_type application/octet-stream;
+
+          log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                          '$status $body_bytes_sent "$http_referer" '
+                          '"$http_user_agent" "$http_x_forwarded_for"';
+
+          access_log /var/log/nginx/access.log main;
+
+          sendfile on;
+          tcp_nopush on;
+          tcp_nodelay on;
+          keepalive_timeout 65;
+          types_hash_max_size 2048;
+          server_tokens off;
+
+          gzip on;
+          gzip_disable "msie6";
+          gzip_vary on;
+          gzip_proxied any;
+          gzip_comp_level 6;
+          gzip_buffers 16 8k;
+          gzip_http_version 1.1;
+          gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+
+          server {
+            listen 80;
+            server_name localhost;
+
+            location / {
+              root /usr/share/nginx/html;
+              index index.html index.htm;
+              try_files $uri $uri/ /index.html =404;
+            }
+
+            location /health {
+              access_log off;
+              return 200 "healthy\n";
+            }
+
+            error_page 500 502 503 504 /50x.html;
+            location = /50x.html {
+              root /usr/share/nginx/html;
+            }
+          }
+        }
+
+# Secret configuration for sensitive data
+secrets:
+  enabled: true
+  type: Opaque
+  data:
+    sql-connection-string: Server=vatfilingpricingtool-sql.database.windows.net;Database=vatfilingpricingtool;User Id=vatfilingpricingtool;Password=YourStrongPassword;
+    cosmos-connection-string: AccountEndpoint=https://vatfilingpricingtool-cosmos.documents.azure.com:443/;AccountKey=YourCosmosAccountKey;
+    redis-connection-string: vatfilingpricingtool-redis.redis.cache.windows.net:6380,password=YourRedisPassword,ssl=True,abortConnect=False
+    storage-connection-string: DefaultEndpointsProtocol=https;AccountName=vatfilingpricingtool;AccountKey=YourStorageAccountKey;EndpointSuffix=core.windows.net
+    azure-ad-tenant-id: 00000000-0000-0000-0000-000000000000
+    azure-ad-client-id: 00000000-0000-0000-0000-000000000000
+    azure-ad-client-secret: YourClientSecret
+    azure-ad-authority: https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000
+    appinsights-instrumentation-key: 00000000-0000-0000-0000-000000000000
+
+# Configuration for ingress-nginx dependency
+ingress-nginx:
+  enabled: true
+  controller:
+    replicaCount: 2
+    service:
+      annotations:
+        service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+
+# Configuration for Redis dependency
+redis:
+  enabled: true
+  architecture: replication
+  auth:
+    enabled: true
+    password: YourRedisPassword
+  master:
+    persistence:
+      enabled: true
+
+# Configuration for Prometheus dependency
+prometheus:
+  enabled: true
+  server:
+    persistentVolume:
+      enabled: true
+      size: 8Gi
+  alertmanager:
+    enabled: true
+    persistentVolume:
+      enabled: true
+      size: 2Gi
+
+# Configuration for cert-manager dependency
+certificates:
+  enabled: true
+  clusterIssuer:
+    email: admin@example.com
