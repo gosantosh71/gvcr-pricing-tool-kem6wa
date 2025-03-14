@@ -1,0 +1,538 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "appServicePlanName": {
+            "type": "string",
+            "metadata": {
+                "description": "Name of the App Service Plan"
+            }
+        },
+        "appServiceName": {
+            "type": "string",
+            "metadata": {
+                "description": "Name of the App Service"
+            }
+        },
+        "location": {
+            "type": "string",
+            "defaultValue": "westeurope",
+            "metadata": {
+                "description": "Azure region for resource deployment"
+            }
+        },
+        "appServicePlanSku": {
+            "type": "object",
+            "defaultValue": {
+                "name": "P2v3",
+                "tier": "PremiumV3",
+                "size": "P2v3",
+                "family": "Pv3",
+                "capacity": 1
+            },
+            "metadata": {
+                "description": "SKU for App Service Plan"
+            }
+        },
+        "appSettings": {
+            "type": "object",
+            "defaultValue": {},
+            "metadata": {
+                "description": "Application settings for the App Service"
+            }
+        },
+        "alwaysOn": {
+            "type": "bool",
+            "defaultValue": true,
+            "metadata": {
+                "description": "Ensures the app is always running"
+            }
+        },
+        "netFrameworkVersion": {
+            "type": "string",
+            "defaultValue": "v6.0",
+            "metadata": {
+                "description": ".NET Framework version"
+            }
+        },
+        "minTlsVersion": {
+            "type": "string",
+            "defaultValue": "1.2",
+            "metadata": {
+                "description": "Minimum TLS version required"
+            }
+        },
+        "ftpsState": {
+            "type": "string",
+            "defaultValue": "Disabled",
+            "allowedValues": [
+                "AllAllowed",
+                "FtpsOnly",
+                "Disabled"
+            ],
+            "metadata": {
+                "description": "State of FTP / FTPS service"
+            }
+        },
+        "http20Enabled": {
+            "type": "bool",
+            "defaultValue": true,
+            "metadata": {
+                "description": "Enable HTTP 2.0"
+            }
+        },
+        "autoScaleSettings": {
+            "type": "object",
+            "defaultValue": {
+                "enabled": true,
+                "minimumCapacity": 1,
+                "maximumCapacity": 5,
+                "defaultCapacity": 1,
+                "rules": [
+                    {
+                        "metricTrigger": {
+                            "metricName": "CpuPercentage",
+                            "metricResourceUri": "",
+                            "timeGrain": "PT1M",
+                            "statistic": "Average",
+                            "timeWindow": "PT5M",
+                            "timeAggregation": "Average",
+                            "operator": "GreaterThan",
+                            "threshold": 70
+                        },
+                        "scaleAction": {
+                            "direction": "Increase",
+                            "type": "ChangeCount",
+                            "value": 1,
+                            "cooldown": "PT5M"
+                        }
+                    },
+                    {
+                        "metricTrigger": {
+                            "metricName": "CpuPercentage",
+                            "metricResourceUri": "",
+                            "timeGrain": "PT1M",
+                            "statistic": "Average",
+                            "timeWindow": "PT5M",
+                            "timeAggregation": "Average",
+                            "operator": "LessThan",
+                            "threshold": 30
+                        },
+                        "scaleAction": {
+                            "direction": "Decrease",
+                            "type": "ChangeCount",
+                            "value": 1,
+                            "cooldown": "PT5M"
+                        }
+                    },
+                    {
+                        "metricTrigger": {
+                            "metricName": "MemoryPercentage",
+                            "metricResourceUri": "",
+                            "timeGrain": "PT1M",
+                            "statistic": "Average",
+                            "timeWindow": "PT5M",
+                            "timeAggregation": "Average",
+                            "operator": "GreaterThan",
+                            "threshold": 80
+                        },
+                        "scaleAction": {
+                            "direction": "Increase",
+                            "type": "ChangeCount",
+                            "value": 1,
+                            "cooldown": "PT5M"
+                        }
+                    }
+                ]
+            },
+            "metadata": {
+                "description": "Auto-scale settings for the App Service Plan"
+            }
+        },
+        "tags": {
+            "type": "object",
+            "defaultValue": {},
+            "metadata": {
+                "description": "Resource tags"
+            }
+        }
+    },
+    "variables": {
+        "appInsightsName": "[concat(parameters('appServiceName'), '-ai')]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Web/serverfarms",
+            "apiVersion": "2021-02-01",
+            "name": "[parameters('appServicePlanName')]",
+            "location": "[parameters('location')]",
+            "tags": "[parameters('tags')]",
+            "sku": "[parameters('appServicePlanSku')]",
+            "kind": "app",
+            "properties": {
+                "reserved": false,
+                "perSiteScaling": false,
+                "maximumElasticWorkerCount": 1,
+                "isSpot": false,
+                "zoneRedundant": true
+            }
+        },
+        {
+            "type": "Microsoft.Web/sites",
+            "apiVersion": "2021-02-01",
+            "name": "[parameters('appServiceName')]",
+            "location": "[parameters('location')]",
+            "tags": "[parameters('tags')]",
+            "kind": "app",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
+                "siteConfig": {
+                    "appSettings": "[parameters('appSettings')]",
+                    "alwaysOn": "[parameters('alwaysOn')]",
+                    "ftpsState": "[parameters('ftpsState')]",
+                    "http20Enabled": true,
+                    "minTlsVersion": "[parameters('minTlsVersion')]",
+                    "netFrameworkVersion": "[parameters('netFrameworkVersion')]",
+                    "healthCheckPath": "/health",
+                    "cors": {
+                        "allowedOrigins": [
+                            "*"
+                        ],
+                        "supportCredentials": false
+                    },
+                    "ipSecurityRestrictions": [
+                        {
+                            "ipAddress": "Any",
+                            "action": "Allow",
+                            "priority": 1,
+                            "name": "Allow all",
+                            "description": "Allow all access"
+                        }
+                    ],
+                    "scmIpSecurityRestrictions": [
+                        {
+                            "ipAddress": "Any",
+                            "action": "Allow",
+                            "priority": 1,
+                            "name": "Allow all",
+                            "description": "Allow all access"
+                        }
+                    ],
+                    "scmIpSecurityRestrictionsUseMain": false,
+                    "httpLoggingEnabled": true,
+                    "logsDirectorySizeLimit": 35,
+                    "detailedErrorLoggingEnabled": true,
+                    "requestTracingEnabled": true,
+                    "requestTracingExpirationTime": "2023-12-31T23:59:59Z"
+                },
+                "clientAffinityEnabled": false,
+                "clientCertEnabled": false,
+                "hostNamesDisabled": false,
+                "httpsOnly": true,
+                "redundancyMode": "ActiveActive"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Insights/autoscalesettings",
+            "apiVersion": "2021-05-01-preview",
+            "name": "[concat(parameters('appServicePlanName'), '-autoscale')]",
+            "location": "[parameters('location')]",
+            "tags": "[parameters('tags')]",
+            "properties": {
+                "name": "[concat(parameters('appServicePlanName'), '-autoscale')]",
+                "enabled": "[parameters('autoScaleSettings').enabled]",
+                "targetResourceUri": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
+                "profiles": [
+                    {
+                        "name": "Default",
+                        "capacity": {
+                            "minimum": "[parameters('autoScaleSettings').minimumCapacity]",
+                            "maximum": "[parameters('autoScaleSettings').maximumCapacity]",
+                            "default": "[parameters('autoScaleSettings').defaultCapacity]"
+                        },
+                        "rules": [
+                            {
+                                "metricTrigger": {
+                                    "metricName": "[parameters('autoScaleSettings').rules[0].metricTrigger.metricName]",
+                                    "metricResourceUri": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
+                                    "timeGrain": "[parameters('autoScaleSettings').rules[0].metricTrigger.timeGrain]",
+                                    "statistic": "[parameters('autoScaleSettings').rules[0].metricTrigger.statistic]",
+                                    "timeWindow": "[parameters('autoScaleSettings').rules[0].metricTrigger.timeWindow]",
+                                    "timeAggregation": "[parameters('autoScaleSettings').rules[0].metricTrigger.timeAggregation]",
+                                    "operator": "[parameters('autoScaleSettings').rules[0].metricTrigger.operator]",
+                                    "threshold": "[parameters('autoScaleSettings').rules[0].metricTrigger.threshold]"
+                                },
+                                "scaleAction": {
+                                    "direction": "[parameters('autoScaleSettings').rules[0].scaleAction.direction]",
+                                    "type": "[parameters('autoScaleSettings').rules[0].scaleAction.type]",
+                                    "value": "[parameters('autoScaleSettings').rules[0].scaleAction.value]",
+                                    "cooldown": "[parameters('autoScaleSettings').rules[0].scaleAction.cooldown]"
+                                }
+                            },
+                            {
+                                "metricTrigger": {
+                                    "metricName": "[parameters('autoScaleSettings').rules[1].metricTrigger.metricName]",
+                                    "metricResourceUri": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
+                                    "timeGrain": "[parameters('autoScaleSettings').rules[1].metricTrigger.timeGrain]",
+                                    "statistic": "[parameters('autoScaleSettings').rules[1].metricTrigger.statistic]",
+                                    "timeWindow": "[parameters('autoScaleSettings').rules[1].metricTrigger.timeWindow]",
+                                    "timeAggregation": "[parameters('autoScaleSettings').rules[1].metricTrigger.timeAggregation]",
+                                    "operator": "[parameters('autoScaleSettings').rules[1].metricTrigger.operator]",
+                                    "threshold": "[parameters('autoScaleSettings').rules[1].metricTrigger.threshold]"
+                                },
+                                "scaleAction": {
+                                    "direction": "[parameters('autoScaleSettings').rules[1].scaleAction.direction]",
+                                    "type": "[parameters('autoScaleSettings').rules[1].scaleAction.type]",
+                                    "value": "[parameters('autoScaleSettings').rules[1].scaleAction.value]",
+                                    "cooldown": "[parameters('autoScaleSettings').rules[1].scaleAction.cooldown]"
+                                }
+                            },
+                            {
+                                "metricTrigger": {
+                                    "metricName": "[parameters('autoScaleSettings').rules[2].metricTrigger.metricName]",
+                                    "metricResourceUri": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
+                                    "timeGrain": "[parameters('autoScaleSettings').rules[2].metricTrigger.timeGrain]",
+                                    "statistic": "[parameters('autoScaleSettings').rules[2].metricTrigger.statistic]",
+                                    "timeWindow": "[parameters('autoScaleSettings').rules[2].metricTrigger.timeWindow]",
+                                    "timeAggregation": "[parameters('autoScaleSettings').rules[2].metricTrigger.timeAggregation]",
+                                    "operator": "[parameters('autoScaleSettings').rules[2].metricTrigger.operator]",
+                                    "threshold": "[parameters('autoScaleSettings').rules[2].metricTrigger.threshold]"
+                                },
+                                "scaleAction": {
+                                    "direction": "[parameters('autoScaleSettings').rules[2].scaleAction.direction]",
+                                    "type": "[parameters('autoScaleSettings').rules[2].scaleAction.type]",
+                                    "value": "[parameters('autoScaleSettings').rules[2].scaleAction.value]",
+                                    "cooldown": "[parameters('autoScaleSettings').rules[2].scaleAction.cooldown]"
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Web/sites/config",
+            "apiVersion": "2021-02-01",
+            "name": "[concat(parameters('appServiceName'), '/web')]",
+            "properties": {
+                "numberOfWorkers": 1,
+                "defaultDocuments": [
+                    "index.html",
+                    "Default.htm",
+                    "Default.html",
+                    "Default.asp",
+                    "index.htm",
+                    "iisstart.htm",
+                    "default.aspx",
+                    "index.php"
+                ],
+                "netFrameworkVersion": "[parameters('netFrameworkVersion')]",
+                "requestTracingEnabled": true,
+                "remoteDebuggingEnabled": false,
+                "httpLoggingEnabled": true,
+                "logsDirectorySizeLimit": 35,
+                "detailedErrorLoggingEnabled": true,
+                "publishingUsername": "$vatfilingpricingtool",
+                "scmType": "None",
+                "use32BitWorkerProcess": false,
+                "webSocketsEnabled": true,
+                "alwaysOn": "[parameters('alwaysOn')]",
+                "managedPipelineMode": "Integrated",
+                "virtualApplications": [
+                    {
+                        "virtualPath": "/",
+                        "physicalPath": "site\\wwwroot",
+                        "preloadEnabled": true
+                    }
+                ],
+                "loadBalancing": "LeastRequests",
+                "experiments": {
+                    "rampUpRules": []
+                },
+                "autoHealEnabled": true,
+                "autoHealRules": {
+                    "triggers": {
+                        "requests": {
+                            "count": 20,
+                            "timeInterval": "00:02:00"
+                        },
+                        "privateBytesInKB": 0,
+                        "statusCodes": [
+                            {
+                                "status": 500,
+                                "count": 20,
+                                "timeInterval": "00:02:00"
+                            }
+                        ],
+                        "slowRequests": {
+                            "timeTaken": "00:00:30",
+                            "count": 20,
+                            "timeInterval": "00:02:00"
+                        }
+                    },
+                    "actions": {
+                        "actionType": "Recycle",
+                        "minProcessExecutionTime": "00:01:00"
+                    }
+                },
+                "localMySqlEnabled": false,
+                "ipSecurityRestrictions": [
+                    {
+                        "ipAddress": "Any",
+                        "action": "Allow",
+                        "priority": 1,
+                        "name": "Allow all",
+                        "description": "Allow all access"
+                    }
+                ],
+                "scmIpSecurityRestrictions": [
+                    {
+                        "ipAddress": "Any",
+                        "action": "Allow",
+                        "priority": 1,
+                        "name": "Allow all",
+                        "description": "Allow all access"
+                    }
+                ],
+                "scmIpSecurityRestrictionsUseMain": false,
+                "http20Enabled": "[parameters('http20Enabled')]",
+                "minTlsVersion": "[parameters('minTlsVersion')]",
+                "ftpsState": "[parameters('ftpsState')]",
+                "preWarmedInstanceCount": 1,
+                "functionAppScaleLimit": 0,
+                "healthCheckPath": "/health",
+                "cors": {
+                    "allowedOrigins": [
+                        "*"
+                    ],
+                    "supportCredentials": false
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('appServiceName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Web/sites/hostNameBindings",
+            "apiVersion": "2021-02-01",
+            "name": "[concat(parameters('appServiceName'), '/', parameters('appServiceName'), '.azurewebsites.net')]",
+            "properties": {
+                "siteName": "[parameters('appServiceName')]",
+                "hostNameType": "Verified"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('appServiceName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Web/sites/slots",
+            "apiVersion": "2021-02-01",
+            "name": "[concat(parameters('appServiceName'), '/staging')]",
+            "location": "[parameters('location')]",
+            "tags": "[parameters('tags')]",
+            "kind": "app",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
+                "siteConfig": {
+                    "appSettings": "[parameters('appSettings')]",
+                    "alwaysOn": "[parameters('alwaysOn')]",
+                    "ftpsState": "[parameters('ftpsState')]",
+                    "http20Enabled": "[parameters('http20Enabled')]",
+                    "minTlsVersion": "[parameters('minTlsVersion')]",
+                    "netFrameworkVersion": "[parameters('netFrameworkVersion')]",
+                    "healthCheckPath": "/health",
+                    "cors": {
+                        "allowedOrigins": [
+                            "*"
+                        ],
+                        "supportCredentials": false
+                    }
+                },
+                "clientAffinityEnabled": false,
+                "clientCertEnabled": false,
+                "hostNamesDisabled": false,
+                "httpsOnly": true
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('appServiceName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Insights/components",
+            "apiVersion": "2020-02-02",
+            "name": "[variables('appInsightsName')]",
+            "location": "[parameters('location')]",
+            "tags": "[parameters('tags')]",
+            "kind": "web",
+            "properties": {
+                "Application_Type": "web",
+                "Request_Source": "rest",
+                "Flow_Type": "Redfield",
+                "publicNetworkAccessForIngestion": "Enabled",
+                "publicNetworkAccessForQuery": "Enabled"
+            }
+        },
+        {
+            "type": "Microsoft.Web/sites/siteextensions",
+            "apiVersion": "2021-02-01",
+            "name": "[concat(parameters('appServiceName'), '/Microsoft.ApplicationInsights.AzureWebSites')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('appServiceName'))]",
+                "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Web/sites/config",
+            "apiVersion": "2021-02-01",
+            "name": "[concat(parameters('appServiceName'), '/appsettings')]",
+            "properties": {
+                "APPINSIGHTS_INSTRUMENTATIONKEY": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName')), '2020-02-02').InstrumentationKey]",
+                "APPLICATIONINSIGHTS_CONNECTION_STRING": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName')), '2020-02-02').ConnectionString]",
+                "ApplicationInsightsAgent_EXTENSION_VERSION": "~2",
+                "XDT_MicrosoftApplicationInsights_Mode": "default"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('appServiceName'))]",
+                "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]"
+            ]
+        }
+    ],
+    "outputs": {
+        "appServiceName": {
+            "type": "string",
+            "value": "[parameters('appServiceName')]"
+        },
+        "appServiceUrl": {
+            "type": "string",
+            "value": "[concat('https://', reference(resourceId('Microsoft.Web/sites', parameters('appServiceName'))).defaultHostName)]"
+        },
+        "appServicePlanId": {
+            "type": "string",
+            "value": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]"
+        },
+        "appServicePrincipalId": {
+            "type": "string",
+            "value": "[reference(resourceId('Microsoft.Web/sites', parameters('appServiceName')), '2021-02-01', 'Full').identity.principalId]"
+        },
+        "stagingSlotUrl": {
+            "type": "string",
+            "value": "[concat('https://', reference(resourceId('Microsoft.Web/sites/slots', parameters('appServiceName'), 'staging')).defaultHostName)]"
+        },
+        "appInsightsInstrumentationKey": {
+            "type": "string",
+            "value": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName')), '2020-02-02').InstrumentationKey]"
+        }
+    }
+}
