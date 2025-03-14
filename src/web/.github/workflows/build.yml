@@ -1,0 +1,110 @@
+name: Build Web Application
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/web/**'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'src/web/**'
+
+env:
+  DOTNET_VERSION: '6.0.x'
+  NODE_VERSION: '16.x'
+  WORKING_DIRECTORY: 'src/web'
+  ARTIFACT_NAME: 'web-build'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: '${{ env.WORKING_DIRECTORY }}/package-lock.json'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Restore dependencies
+        run: dotnet restore
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Install npm packages
+        run: npm ci
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Lint JavaScript
+        run: npm run lint
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Run unit tests
+        run: dotnet test Tests/VatFilingPricingTool.Web.Tests/VatFilingPricingTool.Web.Tests.csproj --configuration Release --no-build --verbosity normal --collect:"XPlat Code Coverage"
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Generate code coverage report
+        run: dotnet tool install --global dotnet-reportgenerator-globaltool && reportgenerator -reports:"**/coverage.cobertura.xml" -targetdir:"coveragereport" -reporttypes:"HtmlInline_AzurePipelines;Cobertura"
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Upload code coverage report
+        uses: actions/upload-artifact@v3
+        with:
+          name: code-coverage-report
+          path: ${{ env.WORKING_DIRECTORY }}/coveragereport
+
+      - name: Check code coverage threshold
+        run: bash -c "if [[ \$(grep -o 'line-rate=\"[0-9]\\+\\.[0-9]\\+\"' coveragereport/Cobertura.xml | grep -o '[0-9]\\+\\.[0-9]\\+') < 0.80 ]]; then echo 'Code coverage is below 80%'; exit 1; fi"
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Run npm tests
+        run: npm test
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Publish web app
+        run: dotnet publish VatFilingPricingTool.Web/VatFilingPricingTool.Web.csproj -c Release -o publish --no-build
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.WORKING_DIRECTORY }}/publish
+
+      - name: Build Docker image
+        run: docker build -t vatfilingpricingtool-web:${{ github.sha }} -f Dockerfile .
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        if: github.ref == 'refs/heads/main'
+
+      - name: Run security scan on Docker image
+        run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image vatfilingpricingtool-web:${{ github.sha }} --format sarif --output trivy-results.sarif
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        if: github.ref == 'refs/heads/main'
+
+      - name: Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: ${{ env.WORKING_DIRECTORY }}/trivy-results.sarif
+        if: github.ref == 'refs/heads/main'
