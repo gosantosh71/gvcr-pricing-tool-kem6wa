@@ -1,0 +1,259 @@
+# Azure DevOps build pipeline for VAT Filing Pricing Tool
+# This pipeline handles the build, test, and package stages for the application
+
+name: $(Build.SourceBranchName)-$(Date:yyyyMMdd)$(Rev:.r)
+
+# Define the branches that trigger the pipeline
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - src/**
+      - infrastructure/**
+      - .azuredevops/**
+
+# Define the PR triggers
+pr:
+  branches:
+    include:
+      - main
+      - develop
+      - feature/*
+  paths:
+    include:
+      - src/**
+      - infrastructure/**
+      - .azuredevops/**
+
+# Define variables used throughout the pipeline
+variables:
+  buildConfiguration: 'Release'
+  vmImageName: 'ubuntu-latest'
+  dotnetVersion: '6.0.x'
+  nodeVersion: '16.x'
+  backendSolution: 'src/backend/VatFilingPricingTool.sln'
+  webProject: 'src/web/VatFilingPricingTool.Web/VatFilingPricingTool.Web.csproj'
+  backendDockerfilePath: 'src/backend/Dockerfile'
+  webDockerfilePath: 'src/web/Dockerfile'
+  backendImageName: 'vatfilingpricingtool-backend'
+  webImageName: 'vatfilingpricingtool-web'
+  acrName: '$(ACR_NAME)'
+  acrResourceGroup: '$(ACR_RESOURCE_GROUP)'
+  codeCoverageThreshold: 80
+
+# Define repository resources
+resources:
+  repositories:
+    - repository: self
+      type: git
+      name: self
+
+# Define the stages of the pipeline
+stages:
+  # Build stage - compile the source code
+  - stage: Build
+    displayName: 'Build and Test'
+    jobs:
+      # Build the backend solution
+      - job: BuildBackend
+        displayName: 'Build Backend'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - template: templates/build-template.yml
+            parameters:
+              projectPath: $(backendSolution)
+              buildConfiguration: $(buildConfiguration)
+              dotnetVersion: $(dotnetVersion)
+              runTests: false
+              publishArtifacts: true
+              artifactName: 'backend-drop'
+              runSonarAnalysis: true
+              sonarProjectKey: 'VatFilingPricingTool_Backend'
+              sonarOrganization: 'vatfilingpricingtool'
+
+      # Build the web application
+      - job: BuildWeb
+        displayName: 'Build Web Application'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: NodeTool@0
+            displayName: 'Install Node.js $(nodeVersion)'
+            inputs:
+              versionSpec: $(nodeVersion)
+              
+          - template: templates/build-template.yml
+            parameters:
+              projectPath: $(webProject)
+              buildConfiguration: $(buildConfiguration)
+              dotnetVersion: $(dotnetVersion)
+              runTests: false
+              publishArtifacts: true
+              artifactName: 'web-drop'
+              runSonarAnalysis: true
+              sonarProjectKey: 'VatFilingPricingTool_Web'
+              sonarOrganization: 'vatfilingpricingtool'
+
+  # Test stage - run all tests
+  - stage: Test
+    displayName: 'Run Tests'
+    dependsOn: Build
+    jobs:
+      # Test the backend
+      - job: TestBackend
+        displayName: 'Test Backend'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          # Run unit tests
+          - template: templates/test-template.yml
+            parameters:
+              testProjects: 'src/backend/Tests/VatFilingPricingTool.UnitTests/VatFilingPricingTool.UnitTests.csproj'
+              testConfiguration: $(buildConfiguration)
+              dotnetVersion: $(dotnetVersion)
+              publishResults: true
+              publishCoverage: true
+              codeCoverageThreshold: $(codeCoverageThreshold)
+              testCategory: '--filter Category=UnitTests'
+
+          # Run integration tests
+          - template: templates/test-template.yml
+            parameters:
+              testProjects: 'src/backend/Tests/VatFilingPricingTool.IntegrationTests/VatFilingPricingTool.IntegrationTests.csproj'
+              testConfiguration: $(buildConfiguration)
+              dotnetVersion: $(dotnetVersion)
+              publishResults: true
+              publishCoverage: true
+              codeCoverageThreshold: 70
+              testCategory: '--filter Category=IntegrationTests'
+
+      # Test the web application
+      - job: TestWeb
+        displayName: 'Test Web Application'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: NodeTool@0
+            displayName: 'Install Node.js $(nodeVersion)'
+            inputs:
+              versionSpec: $(nodeVersion)
+              
+          # Run unit tests for web
+          - template: templates/test-template.yml
+            parameters:
+              testProjects: 'src/web/Tests/VatFilingPricingTool.Web.Tests/VatFilingPricingTool.Web.Tests.csproj'
+              testConfiguration: $(buildConfiguration)
+              dotnetVersion: $(dotnetVersion)
+              publishResults: true
+              publishCoverage: true
+              codeCoverageThreshold: 75
+
+          # Run E2E tests for web
+          - template: templates/test-template.yml
+            parameters:
+              testProjects: 'src/web/Tests/VatFilingPricingTool.Web.E2E.Tests/VatFilingPricingTool.Web.E2E.Tests.csproj'
+              testConfiguration: $(buildConfiguration)
+              dotnetVersion: $(dotnetVersion)
+              runE2ETests: true
+              nodeVersion: $(nodeVersion)
+              publishResults: true
+              publishCoverage: false
+
+  # Package stage - create Docker images and prepare deployment artifacts
+  - stage: Package
+    displayName: 'Package Applications'
+    dependsOn: Test
+    condition: succeeded()
+    jobs:
+      # Build Docker images for the applications
+      - job: BuildDockerImages
+        displayName: 'Build Docker Images'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          # Login to Azure Container Registry
+          - task: AzureCLI@2
+            displayName: 'Login to Azure Container Registry'
+            inputs:
+              azureSubscription: '$(AZURE_SUBSCRIPTION)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: az acr login --name $(acrName)
+
+          # Build and push backend Docker image
+          - task: Docker@2
+            displayName: 'Build and push backend image'
+            inputs:
+              command: buildAndPush
+              repository: $(backendImageName)
+              dockerfile: $(backendDockerfilePath)
+              containerRegistry: $(acrName).azurecr.io
+              tags: |
+                $(Build.BuildNumber)
+                latest
+
+          # Build and push web Docker image
+          - task: Docker@2
+            displayName: 'Build and push web image'
+            inputs:
+              command: buildAndPush
+              repository: $(webImageName)
+              dockerfile: $(webDockerfilePath)
+              containerRegistry: $(acrName).azurecr.io
+              tags: |
+                $(Build.BuildNumber)
+                latest
+
+          # Publish Docker image info as artifact
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish Docker image info'
+            inputs:
+              PathtoPublish: $(Build.ArtifactStagingDirectory)/docker-info
+              ArtifactName: docker-info
+              publishLocation: Container
+
+      # Prepare deployment artifacts
+      - job: PrepareDeploymentArtifacts
+        displayName: 'Prepare Deployment Artifacts'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          # Publish backend API artifacts
+          - task: DotNetCoreCLI@2
+            displayName: 'Publish backend API'
+            inputs:
+              command: publish
+              projects: 'src/backend/VatFilingPricingTool.Api/VatFilingPricingTool.Api.csproj'
+              arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)/backend'
+              zipAfterPublish: true
+              modifyOutputPath: false
+
+          # Publish web application artifacts
+          - task: DotNetCoreCLI@2
+            displayName: 'Publish web application'
+            inputs:
+              command: publish
+              projects: $(webProject)
+              arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)/web'
+              zipAfterPublish: true
+              modifyOutputPath: false
+
+          # Copy Kubernetes manifests
+          - task: CopyFiles@2
+            displayName: 'Copy Kubernetes manifests'
+            inputs:
+              SourceFolder: 'infrastructure/kubernetes'
+              Contents: '**'
+              TargetFolder: $(Build.ArtifactStagingDirectory)/kubernetes
+
+          # Publish all deployment artifacts
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish deployment artifacts'
+            inputs:
+              PathtoPublish: $(Build.ArtifactStagingDirectory)
+              ArtifactName: drop
+              publishLocation: Container
