@@ -1,0 +1,199 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "redisCacheName": {
+            "type": "string",
+            "metadata": {
+                "description": "Name of the Redis Cache instance"
+            }
+        },
+        "location": {
+            "type": "string",
+            "defaultValue": "[resourceGroup().location]",
+            "metadata": {
+                "description": "Location for the Redis Cache"
+            }
+        },
+        "redisCacheSku": {
+            "type": "object",
+            "defaultValue": {
+                "name": "Premium",
+                "family": "P",
+                "capacity": 1
+            },
+            "metadata": {
+                "description": "The SKU of the Redis Cache. Default is Premium P1."
+            }
+        },
+        "enableNonSslPort": {
+            "type": "bool",
+            "defaultValue": false,
+            "metadata": {
+                "description": "Specifies whether the non-SSL Redis server port (6379) is enabled. Default is false."
+            }
+        },
+        "minimumTlsVersion": {
+            "type": "string",
+            "defaultValue": "1.2",
+            "allowedValues": [
+                "1.0",
+                "1.1",
+                "1.2"
+            ],
+            "metadata": {
+                "description": "The minimum TLS version for the Redis Cache. Default is 1.2."
+            }
+        },
+        "redisConfiguration": {
+            "type": "object",
+            "defaultValue": {
+                "maxmemory-policy": "volatile-lru",
+                "maxfragmentationmemory-reserved": "50",
+                "maxmemory-reserved": "50"
+            },
+            "metadata": {
+                "description": "Redis configuration settings. Default optimized for caching with data eviction."
+            }
+        },
+        "vnetResourceGroupName": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "The name of the resource group containing the virtual network. Leave empty if not using VNet integration."
+            }
+        },
+        "vnetName": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "The name of the virtual network for VNet integration. Leave empty if not using VNet integration."
+            }
+        },
+        "subnetName": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "The name of the subnet for VNet integration. Leave empty if not using VNet integration."
+            }
+        },
+        "enableDiagnostics": {
+            "type": "bool",
+            "defaultValue": true,
+            "metadata": {
+                "description": "Enable diagnostic settings"
+            }
+        },
+        "diagnosticStorageAccountId": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Resource ID of the storage account for diagnostics. Leave empty to only use Log Analytics."
+            }
+        },
+        "logAnalyticsWorkspaceId": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Resource ID of the Log Analytics workspace for diagnostics. Required if enableDiagnostics is true."
+            }
+        },
+        "tags": {
+            "type": "object",
+            "defaultValue": {},
+            "metadata": {
+                "description": "Tags to apply to the Redis Cache"
+            }
+        }
+    },
+    "variables": {
+        "redisVersion": "6.0",
+        "isVnetEnabled": "[and(not(empty(parameters('vnetName'))), not(empty(parameters('subnetName'))))]",
+        "subnetId": "[if(variables('isVnetEnabled'), resourceId(if(empty(parameters('vnetResourceGroupName')), resourceGroup().name, parameters('vnetResourceGroupName')), 'Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), parameters('subnetName')), '')]",
+        "diagnosticSettingName": "[concat(parameters('redisCacheName'), '-diagnostics')]"
+    },
+    "resources": [
+        {
+            "name": "[parameters('redisCacheName')]",
+            "type": "Microsoft.Cache/Redis",
+            "apiVersion": "2021-06-01",
+            "location": "[parameters('location')]",
+            "tags": "[parameters('tags')]",
+            "properties": {
+                "sku": {
+                    "name": "[parameters('redisCacheSku').name]",
+                    "family": "[parameters('redisCacheSku').family]",
+                    "capacity": "[parameters('redisCacheSku').capacity]"
+                },
+                "enableNonSslPort": "[parameters('enableNonSslPort')]",
+                "minimumTlsVersion": "[parameters('minimumTlsVersion')]",
+                "redisVersion": "[variables('redisVersion')]",
+                "redisConfiguration": "[parameters('redisConfiguration')]",
+                "publicNetworkAccess": "[if(variables('isVnetEnabled'), 'Disabled', 'Enabled')]",
+                "subnetId": "[if(variables('isVnetEnabled'), variables('subnetId'), json('null'))]",
+                "staticIP": ""
+            }
+        },
+        {
+            "type": "Microsoft.Insights/diagnosticSettings",
+            "apiVersion": "2021-05-01-preview",
+            "name": "[variables('diagnosticSettingName')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Cache/Redis', parameters('redisCacheName'))]"
+            ],
+            "properties": {
+                "storageAccountId": "[if(and(parameters('enableDiagnostics'), not(empty(parameters('diagnosticStorageAccountId')))), parameters('diagnosticStorageAccountId'), json('null'))]",
+                "workspaceId": "[if(and(parameters('enableDiagnostics'), not(empty(parameters('logAnalyticsWorkspaceId')))), parameters('logAnalyticsWorkspaceId'), json('null'))]",
+                "metrics": [
+                    {
+                        "category": "AllMetrics",
+                        "enabled": "[parameters('enableDiagnostics')]",
+                        "retentionPolicy": {
+                            "days": 30,
+                            "enabled": true
+                        },
+                        "timeGrain": null
+                    }
+                ],
+                "logs": [
+                    {
+                        "category": "ConnectedClientList",
+                        "enabled": "[parameters('enableDiagnostics')]",
+                        "retentionPolicy": {
+                            "days": 30,
+                            "enabled": true
+                        }
+                    }
+                ]
+            },
+            "scope": "[resourceId('Microsoft.Cache/Redis', parameters('redisCacheName'))]",
+            "condition": "[parameters('enableDiagnostics')]"
+        }
+    ],
+    "outputs": {
+        "redisCacheName": {
+            "type": "string",
+            "value": "[parameters('redisCacheName')]"
+        },
+        "redisResourceId": {
+            "type": "string",
+            "value": "[resourceId('Microsoft.Cache/Redis', parameters('redisCacheName'))]"
+        },
+        "redisHostName": {
+            "type": "string",
+            "value": "[reference(resourceId('Microsoft.Cache/Redis', parameters('redisCacheName'))).hostName]"
+        },
+        "redisSslPort": {
+            "type": "int",
+            "value": "[reference(resourceId('Microsoft.Cache/Redis', parameters('redisCacheName'))).sslPort]"
+        },
+        "redisConnectionString": {
+            "type": "string",
+            "value": "[concat(reference(resourceId('Microsoft.Cache/Redis', parameters('redisCacheName'))).hostName, ':', reference(resourceId('Microsoft.Cache/Redis', parameters('redisCacheName'))).sslPort, ',password=', listKeys(resourceId('Microsoft.Cache/Redis', parameters('redisCacheName')), '2021-06-01').primaryKey, ',ssl=True,abortConnect=False')]"
+        },
+        "isVNetIntegrated": {
+            "type": "bool",
+            "value": "[variables('isVnetEnabled')]"
+        }
+    }
+}
