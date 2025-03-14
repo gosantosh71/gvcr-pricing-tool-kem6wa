@@ -1,0 +1,287 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "logAnalyticsWorkspaceName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the Log Analytics Workspace"
+      }
+    },
+    "appInsightsName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the Application Insights instance"
+      }
+    },
+    "location": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure region for the monitoring resources"
+      }
+    },
+    "retentionInDays": {
+      "type": "int",
+      "defaultValue": 90,
+      "minValue": 30,
+      "maxValue": 730,
+      "metadata": {
+        "description": "Number of days to retain data in Log Analytics"
+      }
+    },
+    "dailyQuotaGb": {
+      "type": "int",
+      "defaultValue": 5,
+      "metadata": {
+        "description": "Daily data cap in GB for Log Analytics Workspace"
+      }
+    },
+    "createAlertRules": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Whether to create default alert rules"
+      }
+    },
+    "actionGroupName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Name of the Action Group for alerts (optional)"
+      }
+    },
+    "actionGroupEmails": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Email addresses for the Action Group (optional)"
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Resource tags"
+      }
+    }
+  },
+  "variables": {
+    "workspaceSku": "PerGB2018",
+    "appInsightsType": "web",
+    "actionGroupId": "[if(not(empty(parameters('actionGroupName'))), resourceId('Microsoft.Insights/actionGroups', parameters('actionGroupName')), '')]",
+    "defaultAlertRules": [
+      {
+        "name": "HighCpuAlert",
+        "displayName": "High CPU Usage Alert",
+        "description": "Alert when CPU usage exceeds 80% for 5 minutes",
+        "severity": 2,
+        "evaluationFrequency": "PT1M",
+        "windowSize": "PT5M",
+        "criteria": {
+          "metricName": "CpuPercentage",
+          "metricNamespace": "Microsoft.Web/sites",
+          "operator": "GreaterThan",
+          "threshold": 80,
+          "timeAggregation": "Average"
+        }
+      },
+      {
+        "name": "HighMemoryAlert",
+        "displayName": "High Memory Usage Alert",
+        "description": "Alert when memory usage exceeds 85% for 5 minutes",
+        "severity": 2,
+        "evaluationFrequency": "PT1M",
+        "windowSize": "PT5M",
+        "criteria": {
+          "metricName": "MemoryPercentage",
+          "metricNamespace": "Microsoft.Web/sites",
+          "operator": "GreaterThan",
+          "threshold": 85,
+          "timeAggregation": "Average"
+        }
+      },
+      {
+        "name": "HighErrorRateAlert",
+        "displayName": "High Error Rate Alert",
+        "description": "Alert when error rate exceeds 5% for 15 minutes",
+        "severity": 1,
+        "evaluationFrequency": "PT1M",
+        "windowSize": "PT15M",
+        "criteria": {
+          "metricName": "requests/failed",
+          "metricNamespace": "microsoft.insights/components",
+          "operator": "GreaterThan",
+          "threshold": 5,
+          "timeAggregation": "Average"
+        }
+      },
+      {
+        "name": "LongResponseTimeAlert",
+        "displayName": "Long Response Time Alert",
+        "description": "Alert when response time exceeds 3 seconds for 5 minutes",
+        "severity": 2,
+        "evaluationFrequency": "PT1M",
+        "windowSize": "PT5M",
+        "criteria": {
+          "metricName": "requests/duration",
+          "metricNamespace": "microsoft.insights/components",
+          "operator": "GreaterThan",
+          "threshold": 3000,
+          "timeAggregation": "Average"
+        }
+      }
+    ]
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2021-06-01",
+      "name": "[parameters('logAnalyticsWorkspaceName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "sku": {
+          "name": "[variables('workspaceSku')]"
+        },
+        "retentionInDays": "[parameters('retentionInDays')]",
+        "features": {
+          "enableLogAccessUsingOnlyResourcePermissions": true
+        },
+        "workspaceCapping": {
+          "dailyQuotaGb": "[parameters('dailyQuotaGb')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/components",
+      "apiVersion": "2020-02-02",
+      "name": "[parameters('appInsightsName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "[variables('appInsightsType')]",
+      "properties": {
+        "Application_Type": "[variables('appInsightsType')]",
+        "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]",
+        "RetentionInDays": "[parameters('retentionInDays')]",
+        "IngestionMode": "LogAnalytics",
+        "publicNetworkAccessForIngestion": "Enabled",
+        "publicNetworkAccessForQuery": "Enabled"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Insights/actionGroups",
+      "apiVersion": "2021-09-01",
+      "name": "[parameters('actionGroupName')]",
+      "location": "Global",
+      "condition": "[not(empty(parameters('actionGroupName')))]",
+      "properties": {
+        "groupShortName": "VatAlerts",
+        "enabled": true,
+        "emailReceivers": "[if(empty(parameters('actionGroupEmails')), json('[]'), createArray(createObject('name', 'email', 'emailAddress', parameters('actionGroupEmails')[0], 'useCommonAlertSchema', true)))]"
+      }
+    },
+    {
+      "type": "Microsoft.Insights/metricAlerts",
+      "apiVersion": "2018-03-01",
+      "name": "[concat(parameters('appInsightsName'), '-', variables('defaultAlertRules')[copyIndex()].name)]",
+      "location": "global",
+      "condition": "[and(parameters('createAlertRules'), not(empty(parameters('actionGroupName'))))]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "description": "[variables('defaultAlertRules')[copyIndex()].description]",
+        "severity": "[variables('defaultAlertRules')[copyIndex()].severity]",
+        "enabled": true,
+        "scopes": [
+          "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]"
+        ],
+        "evaluationFrequency": "[variables('defaultAlertRules')[copyIndex()].evaluationFrequency]",
+        "windowSize": "[variables('defaultAlertRules')[copyIndex()].windowSize]",
+        "criteria": {
+          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+          "allOf": [
+            {
+              "name": "condition1",
+              "metricName": "[variables('defaultAlertRules')[copyIndex()].criteria.metricName]",
+              "metricNamespace": "[variables('defaultAlertRules')[copyIndex()].criteria.metricNamespace]",
+              "operator": "[variables('defaultAlertRules')[copyIndex()].criteria.operator]",
+              "threshold": "[variables('defaultAlertRules')[copyIndex()].criteria.threshold]",
+              "timeAggregation": "[variables('defaultAlertRules')[copyIndex()].criteria.timeAggregation]"
+            }
+          ]
+        },
+        "actions": [
+          {
+            "actionGroupId": "[variables('actionGroupId')]"
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]",
+        "[resourceId('Microsoft.Insights/actionGroups', parameters('actionGroupName'))]"
+      ],
+      "copy": {
+        "name": "alertRulesCopy",
+        "count": "[length(variables('defaultAlertRules'))]"
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/savedSearches",
+      "apiVersion": "2020-08-01",
+      "name": "[concat(parameters('logAnalyticsWorkspaceName'), '/ApiErrorRates')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]"
+      ],
+      "properties": {
+        "displayName": "API Error Rates",
+        "category": "VAT Filing Pricing Tool",
+        "query": "AppRequests | where ResultCode >= 400 | summarize ErrorCount=count() by bin(TimeGenerated, 15m), ResultCode | render timechart",
+        "version": 2
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/savedSearches",
+      "apiVersion": "2020-08-01",
+      "name": "[concat(parameters('logAnalyticsWorkspaceName'), '/CalculationPerformance')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]"
+      ],
+      "properties": {
+        "displayName": "Calculation Performance",
+        "category": "VAT Filing Pricing Tool",
+        "query": "AppRequests | where Name contains 'calculate' | summarize AvgDuration=avg(Duration), MaxDuration=max(Duration), P95Duration=percentile(Duration, 95) by bin(TimeGenerated, 1h) | render timechart",
+        "version": 2
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/savedSearches",
+      "apiVersion": "2020-08-01",
+      "name": "[concat(parameters('logAnalyticsWorkspaceName'), '/UserActivity')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]"
+      ],
+      "properties": {
+        "displayName": "User Activity",
+        "category": "VAT Filing Pricing Tool",
+        "query": "AppRequests | where Operation contains 'User' or Operation contains 'Auth' | summarize RequestCount=count() by bin(TimeGenerated, 1h), Operation | render timechart",
+        "version": 2
+      }
+    }
+  ],
+  "outputs": {
+    "logAnalyticsWorkspaceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]"
+    },
+    "appInsightsInstrumentationKey": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName'))).InstrumentationKey]"
+    },
+    "appInsightsConnectionString": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName'))).ConnectionString]"
+    }
+  }
+}
