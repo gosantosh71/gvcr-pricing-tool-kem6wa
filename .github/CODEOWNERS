@@ -1,0 +1,45 @@
+# Each line is a file pattern followed by one or more owners.
+# Order is important; the last matching pattern takes precedence.
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything in the repo
+# These owners will be the default owners for everything in the repository
+# unless a later match takes precedence.
+*                                               @project-leads
+
+# Backend Code
+src/backend/                                    @backend-team
+src/backend/VatFilingPricingTool.Api/           @api-team
+src/backend/VatFilingPricingTool.Service/       @service-team
+src/backend/VatFilingPricingTool.Domain/        @domain-experts
+
+# Frontend Code
+src/web/                                        @frontend-team
+src/web/VatFilingPricingTool.Web/Components/    @ui-component-team
+
+# Infrastructure
+infrastructure/                                 @devops-team
+infrastructure/kubernetes/                      @kubernetes-experts
+infrastructure/azure/                           @azure-cloud-team
+
+# CI/CD Pipelines
+.github/workflows/                              @devops-team @ci-cd-experts
+.azuredevops/pipelines/                         @devops-team @ci-cd-experts
+
+# Documentation
+docs/                                           @documentation-team
+docs/architecture/                              @architecture-team
+docs/api/                                       @api-team
+
+# Tests
+src/backend/Tests/                              @qa-team @backend-team
+src/web/Tests/                                  @qa-team @frontend-team
+
+# Security-Critical Files
+src/backend/VatFilingPricingTool.Infrastructure/Authentication/  @security-team
+src/web/VatFilingPricingTool.Web/Authentication/                 @security-team
+infrastructure/azure/arm-templates/keyvault.json                 @security-team @devops-team
+
+# GitHub Configuration
+.github/                                        @devops-team @project-leads
+.github/CODEOWNERS                              @project-leads
