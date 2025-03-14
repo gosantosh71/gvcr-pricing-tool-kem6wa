@@ -1,0 +1,156 @@
+{{- if and .Values.ingress.enabled .Values.ingress.backend.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "vatfilingpricingtool.fullname" . }}-{{ .Values.backend.name }}
+  labels:
+    app.kubernetes.io/name: {{ include "vatfilingpricingtool.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: {{ .Values.backend.name }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if .Values.ingress.backend.annotations }}
+    {{- toYaml .Values.ingress.backend.annotations | nindent 4 }}
+    {{- end }}
+    kubernetes.io/ingress.class: {{ .Values.ingress.className }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.backend.tls }}
+  tls:
+    {{- range .Values.ingress.backend.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.backend.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "vatfilingpricingtool.fullname" $ }}-{{ $.Values.backend.name }}
+                port:
+                  name: http
+          {{- end }}
+    {{- end }}
+{{- end }}
+
+{{- if and .Values.ingress.enabled .Values.ingress.web.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "vatfilingpricingtool.fullname" . }}-{{ .Values.web.name }}
+  labels:
+    app.kubernetes.io/name: {{ include "vatfilingpricingtool.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: {{ .Values.web.name }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if .Values.ingress.web.annotations }}
+    {{- toYaml .Values.ingress.web.annotations | nindent 4 }}
+    {{- end }}
+    kubernetes.io/ingress.class: {{ .Values.ingress.className }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.web.tls }}
+  tls:
+    {{- range .Values.ingress.web.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.web.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "vatfilingpricingtool.fullname" $ }}-{{ $.Values.web.name }}
+                port:
+                  name: http
+          {{- end }}
+    {{- end }}
+{{- end }}
+
+{{- if and .Values.certificates.enabled .Values.ingress.backend.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "vatfilingpricingtool.fullname" . }}-{{ .Values.backend.name }}-cert
+  labels:
+    app.kubernetes.io/name: {{ include "vatfilingpricingtool.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: {{ .Values.backend.name }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  secretName: {{ range .Values.ingress.backend.tls }}{{ .secretName }}{{ end }}
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  commonName: {{ range .Values.ingress.backend.hosts }}{{ .host }}{{ end }}
+  dnsNames:
+    {{- range .Values.ingress.backend.hosts }}
+    - {{ .host }}
+    {{- end }}
+  duration: 2160h # 90 days
+  renewBefore: 720h # 30 days
+  privateKey:
+    algorithm: RSA
+    encoding: PKCS1
+    size: 2048
+{{- end }}
+
+{{- if and .Values.certificates.enabled .Values.ingress.web.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "vatfilingpricingtool.fullname" . }}-{{ .Values.web.name }}-cert
+  labels:
+    app.kubernetes.io/name: {{ include "vatfilingpricingtool.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: {{ .Values.web.name }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  secretName: {{ range .Values.ingress.web.tls }}{{ .secretName }}{{ end }}
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  commonName: {{ range .Values.ingress.web.hosts }}{{ .host }}{{ end }}
+  dnsNames:
+    {{- range .Values.ingress.web.hosts }}
+    - {{ .host }}
+    {{- end }}
+  duration: 2160h # 90 days
+  renewBefore: 720h # 30 days
+  privateKey:
+    algorithm: RSA
+    encoding: PKCS1
+    size: 2048
+{{- end }}
