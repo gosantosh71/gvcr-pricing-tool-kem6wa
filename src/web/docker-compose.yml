@@ -1,0 +1,72 @@
+version: '3.8'
+name: vat-filing-pricing-tool-web
+
+services:
+  web-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        ASPNETCORE_ENVIRONMENT: Development
+    ports:
+      - "8080:80"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - API_BASE_URL=http://mock-api:3000
+    volumes:
+      - ./VatFilingPricingTool.Web:/src/VatFilingPricingTool.Web
+      - ./wwwroot:/usr/share/nginx/html
+    networks:
+      - vat-filing-web-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  mock-api:
+    image: node:16-alpine
+    working_dir: /app
+    volumes:
+      - ./mock-api:/app
+    ports:
+      - "3000:3000"
+    command: sh -c "npm install && npm start"
+    environment:
+      - NODE_ENV=development
+    networks:
+      - vat-filing-web-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  dev-server:
+    image: node:16-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+    ports:
+      - "5000:5000"
+    command: sh -c "npm install && npm run start"
+    environment:
+      - NODE_ENV=development
+      - CHOKIDAR_USEPOLLING=true
+    networks:
+      - vat-filing-web-network
+    restart: unless-stopped
+
+networks:
+  vat-filing-web-network:
+    driver: bridge
+
+volumes:
+  node_modules:
+    driver: local
+
+env_file: .env.development
