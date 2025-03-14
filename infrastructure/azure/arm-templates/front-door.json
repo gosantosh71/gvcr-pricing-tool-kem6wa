@@ -1,0 +1,287 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "frontDoorName": {
+            "type": "string",
+            "metadata": {
+                "description": "Name of the Front Door resource"
+            }
+        },
+        "backendPools": {
+            "type": "array",
+            "metadata": {
+                "description": "Array of backend pools with their backends"
+            }
+        },
+        "frontendEndpoints": {
+            "type": "array",
+            "metadata": {
+                "description": "Array of frontend endpoints"
+            }
+        },
+        "routingRules": {
+            "type": "array",
+            "metadata": {
+                "description": "Array of routing rules"
+            }
+        },
+        "enableWAF": {
+            "type": "bool",
+            "defaultValue": true,
+            "metadata": {
+                "description": "Enable Web Application Firewall"
+            }
+        },
+        "wafMode": {
+            "type": "string",
+            "defaultValue": "Detection",
+            "allowedValues": [
+                "Detection",
+                "Prevention"
+            ],
+            "metadata": {
+                "description": "WAF mode: Detection or Prevention"
+            }
+        },
+        "wafRuleSetType": {
+            "type": "string",
+            "defaultValue": "DefaultRuleSet",
+            "metadata": {
+                "description": "WAF rule set type"
+            }
+        },
+        "wafRuleSetVersion": {
+            "type": "string",
+            "defaultValue": "1.0",
+            "metadata": {
+                "description": "WAF rule set version"
+            }
+        },
+        "healthProbeSettings": {
+            "type": "object",
+            "defaultValue": {
+                "path": "/health",
+                "protocol": "Https",
+                "intervalInSeconds": 30
+            },
+            "metadata": {
+                "description": "Health probe settings for backend pools"
+            }
+        },
+        "loadBalancingSettings": {
+            "type": "object",
+            "defaultValue": {
+                "sampleSize": 4,
+                "successfulSamplesRequired": 2,
+                "additionalLatencyMilliseconds": 0
+            },
+            "metadata": {
+                "description": "Load balancing settings for backend pools"
+            }
+        },
+        "logAnalyticsWorkspaceId": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Resource ID of the Log Analytics workspace for diagnostics settings"
+            }
+        },
+        "tags": {
+            "type": "object",
+            "defaultValue": {},
+            "metadata": {
+                "description": "Resource tags"
+            }
+        }
+    },
+    "variables": {
+        "frontDoorId": "[resourceId('Microsoft.Network/frontDoors', parameters('frontDoorName'))]",
+        "wafPolicyName": "[concat(parameters('frontDoorName'), '-waf')]",
+        "diagnosticsSettingsName": "[concat(parameters('frontDoorName'), '-diagnostics')]",
+        "frontDoorEndpoint": "[concat('https://', parameters('frontDoorName'), '.azurefd.net')]",
+        "healthProbeSettingsName": "healthProbeSettings",
+        "loadBalancingSettingsName": "loadBalancingSettings"
+    },
+    "resources": [
+        {
+            "condition": "[parameters('enableWAF')]",
+            "type": "Microsoft.Network/FrontDoorWebApplicationFirewallPolicies",
+            "apiVersion": "2020-11-01",
+            "name": "[variables('wafPolicyName')]",
+            "location": "global",
+            "tags": "[parameters('tags')]",
+            "properties": {
+                "policySettings": {
+                    "enabledState": "Enabled",
+                    "mode": "[parameters('wafMode')]",
+                    "customBlockResponseStatusCode": 403,
+                    "requestBodyCheck": "Enabled"
+                },
+                "managedRules": {
+                    "managedRuleSets": [
+                        {
+                            "ruleSetType": "[parameters('wafRuleSetType')]",
+                            "ruleSetVersion": "[parameters('wafRuleSetVersion')]",
+                            "ruleGroupOverrides": []
+                        },
+                        {
+                            "ruleSetType": "Microsoft_BotManagerRuleSet",
+                            "ruleSetVersion": "1.0",
+                            "ruleGroupOverrides": []
+                        }
+                    ]
+                },
+                "customRules": {
+                    "rules": [
+                        {
+                            "name": "RateLimitRule",
+                            "priority": 100,
+                            "enabledState": "Enabled",
+                            "ruleType": "RateLimitRule",
+                            "rateLimitDurationInMinutes": 1,
+                            "rateLimitThreshold": 1000,
+                            "matchConditions": [
+                                {
+                                    "matchVariable": "RequestUri",
+                                    "operator": "Any",
+                                    "matchValue": [
+                                        "/"
+                                    ]
+                                }
+                            ],
+                            "action": "Block"
+                        },
+                        {
+                            "name": "GeoFilterRule",
+                            "priority": 200,
+                            "enabledState": "Enabled",
+                            "ruleType": "MatchRule",
+                            "matchConditions": [
+                                {
+                                    "matchVariable": "RemoteAddr",
+                                    "operator": "GeoMatch",
+                                    "matchValue": [
+                                        "CN",
+                                        "RU",
+                                        "KP"
+                                    ]
+                                }
+                            ],
+                            "action": "Block"
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Network/frontDoors",
+            "apiVersion": "2021-06-01",
+            "name": "[parameters('frontDoorName')]",
+            "location": "global",
+            "tags": "[parameters('tags')]",
+            "properties": {
+                "enabledState": "Enabled",
+                "friendlyName": "[parameters('frontDoorName')]",
+                "healthProbeSettings": [
+                    {
+                        "name": "[variables('healthProbeSettingsName')]",
+                        "properties": {
+                            "path": "[parameters('healthProbeSettings').path]",
+                            "protocol": "[parameters('healthProbeSettings').protocol]",
+                            "intervalInSeconds": "[parameters('healthProbeSettings').intervalInSeconds]",
+                            "healthProbeMethod": "HEAD",
+                            "enabledState": "Enabled"
+                        }
+                    }
+                ],
+                "loadBalancingSettings": [
+                    {
+                        "name": "[variables('loadBalancingSettingsName')]",
+                        "properties": {
+                            "sampleSize": "[parameters('loadBalancingSettings').sampleSize]",
+                            "successfulSamplesRequired": "[parameters('loadBalancingSettings').successfulSamplesRequired]",
+                            "additionalLatencyMilliseconds": "[parameters('loadBalancingSettings').additionalLatencyMilliseconds]"
+                        }
+                    }
+                ],
+                "frontendEndpoints": "[parameters('frontendEndpoints')]",
+                "backendPools": "[parameters('backendPools')]",
+                "routingRules": "[parameters('routingRules')]"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/FrontDoorWebApplicationFirewallPolicies', variables('wafPolicyName'))]"
+            ]
+        },
+        {
+            "condition": "[and(parameters('enableWAF'), not(empty(parameters('frontendEndpoints'))))]",
+            "type": "Microsoft.Network/frontDoors/frontendEndpoints/routingRules",
+            "apiVersion": "2021-06-01",
+            "name": "[concat(parameters('frontDoorName'), '/', parameters('frontendEndpoints')[0].name, '/wafPolicy')]",
+            "properties": {
+                "webApplicationFirewallPolicyLink": {
+                    "id": "[resourceId('Microsoft.Network/FrontDoorWebApplicationFirewallPolicies', variables('wafPolicyName'))]"
+                }
+            },
+            "dependsOn": [
+                "[variables('frontDoorId')]"
+            ]
+        },
+        {
+            "condition": "[not(empty(parameters('logAnalyticsWorkspaceId')))]",
+            "type": "Microsoft.Insights/diagnosticSettings",
+            "apiVersion": "2021-05-01-preview",
+            "name": "[variables('diagnosticsSettingsName')]",
+            "properties": {
+                "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                "logs": [
+                    {
+                        "category": "FrontdoorAccessLog",
+                        "enabled": true,
+                        "retentionPolicy": {
+                            "days": 30,
+                            "enabled": true
+                        }
+                    },
+                    {
+                        "category": "FrontdoorWebApplicationFirewallLog",
+                        "enabled": true,
+                        "retentionPolicy": {
+                            "days": 30,
+                            "enabled": true
+                        }
+                    }
+                ],
+                "metrics": [
+                    {
+                        "category": "AllMetrics",
+                        "enabled": true,
+                        "retentionPolicy": {
+                            "days": 30,
+                            "enabled": true
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[variables('frontDoorId')]"
+            ],
+            "scope": "[variables('frontDoorId')]"
+        }
+    ],
+    "outputs": {
+        "frontDoorEndpoint": {
+            "type": "string",
+            "value": "[variables('frontDoorEndpoint')]"
+        },
+        "frontDoorId": {
+            "type": "string",
+            "value": "[variables('frontDoorId')]"
+        },
+        "wafPolicyId": {
+            "type": "string",
+            "condition": "[parameters('enableWAF')]",
+            "value": "[resourceId('Microsoft.Network/FrontDoorWebApplicationFirewallPolicies', variables('wafPolicyName'))]"
+        }
+    }
+}
