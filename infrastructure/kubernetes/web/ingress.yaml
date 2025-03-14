@@ -1,0 +1,91 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vatfilingpricingtool-web-ingress
+  namespace: vatfilingpricingtool
+  labels:
+    app: vatfilingpricingtool
+    component: web
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_set_header X-Real-IP $remote_addr;
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+spec:
+  tls:
+  - hosts:
+    - ${WEB_HOST}
+    secretName: vatfilingpricingtool-web-tls
+  rules:
+  - host: ${WEB_HOST}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: vatfilingpricingtool-web
+            port:
+              name: http
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vatfilingpricingtool-web-cert
+  namespace: vatfilingpricingtool
+  labels:
+    app: vatfilingpricingtool
+    component: web
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+spec:
+  secretName: vatfilingpricingtool-web-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  commonName: ${WEB_HOST}
+  dnsNames:
+  - ${WEB_HOST}
+  duration: 2160h  # 90 days
+  renewBefore: 720h  # 30 days
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vatfilingpricingtool-web-network-policy
+  namespace: vatfilingpricingtool
+  labels:
+    app: vatfilingpricingtool
+    component: web
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+spec:
+  podSelector:
+    matchLabels:
+      app: vatfilingpricingtool
+      component: web
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 80
