@@ -1,0 +1,413 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+  labels:
+    app: grafana
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+data:
+  datasources.yaml: |
+    apiVersion: 1
+
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        editable: false
+        jsonData:
+          timeInterval: 15s
+          queryTimeout: 120s
+          httpMethod: POST
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki:3100
+        editable: false
+        jsonData:
+          maxLines: 1000
+          derivedFields:
+            - name: traceID
+              matcherRegex: "traceId=(\\w+)"
+              url: "${__value.raw}"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-config
+  namespace: monitoring
+  labels:
+    app: grafana
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+data:
+  grafana.ini: |
+    [server]
+    root_url = https://grafana.vatfilingpricingtool.com
+    serve_from_sub_path = true
+
+    [security]
+    admin_user = admin
+    admin_password = ${GRAFANA_ADMIN_PASSWORD}
+    disable_initial_admin_creation = false
+    secret_key = ${GRAFANA_SECRET_KEY}
+
+    [auth]
+    disable_login_form = false
+    disable_signout_menu = false
+
+    [auth.azure_ad]
+    enabled = true
+    allow_sign_up = true
+    auth_url = https://login.microsoftonline.com/${AZURE_TENANT_ID}/oauth2/v2.0/authorize
+    token_url = https://login.microsoftonline.com/${AZURE_TENANT_ID}/oauth2/v2.0/token
+    api_url = https://graph.microsoft.com/v1.0/me
+    client_id = ${AZURE_CLIENT_ID}
+    client_secret = ${AZURE_CLIENT_SECRET}
+    scopes = openid email profile
+    allowed_domains = vatfilingpricingtool.com
+    allowed_groups = Monitoring, DevOps, Administrators
+
+    [users]
+    allow_sign_up = false
+    auto_assign_org = true
+    auto_assign_org_role = Editor
+
+    [dashboards]
+    default_home_dashboard_path = /var/lib/grafana/dashboards/system-dashboard.json
+
+    [paths]
+    provisioning = /etc/grafana/provisioning
+
+    [alerting]
+    enabled = true
+    execute_alerts = true
+
+    [unified_alerting]
+    enabled = true
+
+    [analytics]
+    reporting_enabled = false
+    check_for_updates = true
+
+    [log]
+    mode = console
+    level = info
+
+    [metrics]
+    enabled = true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provisioning
+  namespace: monitoring
+  labels:
+    app: grafana
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+
+    providers:
+      - name: 'default'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: true
+        updateIntervalSeconds: 30
+        allowUiUpdates: false
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: monitoring
+  labels:
+    app: grafana
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+data:
+  system-dashboard.json: ${SYSTEM_DASHBOARD_JSON}
+  application-dashboard.json: ${APPLICATION_DASHBOARD_JSON}
+  business-dashboard.json: ${BUSINESS_DASHBOARD_JSON}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+    spec:
+      securityContext:
+        fsGroup: 472
+        runAsGroup: 472
+        runAsNonRoot: true
+        runAsUser: 472
+      containers:
+      - name: grafana
+        image: grafana/grafana:9.3.2
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 3000
+          protocol: TCP
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        env:
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: grafana-credentials
+              key: admin-password
+        - name: GF_SECURITY_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: grafana-credentials
+              key: secret-key
+        - name: GF_AUTH_AZURE_AD_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: grafana-credentials
+              key: azure-client-id
+        - name: GF_AUTH_AZURE_AD_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: grafana-credentials
+              key: azure-client-secret
+        - name: GF_AUTH_AZURE_AD_TENANT_ID
+          valueFrom:
+            secretKeyRef:
+              name: grafana-credentials
+              key: azure-tenant-id
+        volumeMounts:
+        - name: config
+          mountPath: /etc/grafana/grafana.ini
+          subPath: grafana.ini
+        - name: datasources
+          mountPath: /etc/grafana/provisioning/datasources
+        - name: dashboard-provisioning
+          mountPath: /etc/grafana/provisioning/dashboards
+        - name: dashboards
+          mountPath: /var/lib/grafana/dashboards
+        - name: storage
+          mountPath: /var/lib/grafana
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 60
+          timeoutSeconds: 5
+          periodSeconds: 15
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+      volumes:
+      - name: config
+        configMap:
+          name: grafana-config
+      - name: datasources
+        configMap:
+          name: grafana-datasources
+      - name: dashboard-provisioning
+        configMap:
+          name: grafana-dashboard-provisioning
+      - name: dashboards
+        configMap:
+          name: grafana-dashboards
+      - name: storage
+        persistentVolumeClaim:
+          claimName: grafana-storage
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-storage
+  namespace: monitoring
+  labels:
+    app: grafana
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: managed-premium
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "3000"
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP
+  selector:
+    app: grafana
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-credentials
+  namespace: monitoring
+  labels:
+    app: grafana
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+type: Opaque
+data:
+  admin-password: ${GRAFANA_ADMIN_PASSWORD_BASE64}
+  secret-key: ${GRAFANA_SECRET_KEY_BASE64}
+  azure-client-id: ${AZURE_CLIENT_ID_BASE64}
+  azure-client-secret: ${AZURE_CLIENT_SECRET_BASE64}
+  azure-tenant-id: ${AZURE_TENANT_ID_BASE64}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana-ingress
+  namespace: monitoring
+  labels:
+    app: grafana
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+  - hosts:
+    - grafana.vatfilingpricingtool.com
+    secretName: grafana-tls
+  rules:
+  - host: grafana.vatfilingpricingtool.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: grafana
+            port:
+              name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grafana-network-policy
+  namespace: monitoring
+  labels:
+    app: grafana
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+spec:
+  podSelector:
+    matchLabels:
+      app: grafana
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+      podSelector:
+        matchLabels:
+          app: nginx-ingress
+    ports:
+    - port: 3000
+      protocol: TCP
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: prometheus
+    - podSelector:
+        matchLabels:
+          app: loki
+    ports:
+    - port: 9090
+      protocol: TCP
+    - port: 3100
+      protocol: TCP
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+    ports:
+    - port: 443
+      protocol: TCP
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: grafana-pdb
+  namespace: monitoring
+  labels:
+    app: grafana
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: grafana
