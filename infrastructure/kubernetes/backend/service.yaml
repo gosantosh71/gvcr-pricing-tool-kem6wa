@@ -1,0 +1,64 @@
+# Define the main API service for external access
+apiVersion: v1
+kind: Service
+metadata:
+  name: vatfilingpricingtool-api
+  namespace: vatfilingpricingtool
+  labels:
+    app: vatfilingpricingtool
+    component: api
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+  annotations:
+    description: "Backend API service for the VAT Filing Pricing Tool"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "80"
+    prometheus.io/path: "/metrics"
+spec:
+  # ClusterIP makes the service only reachable from within the cluster
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+  # Selector determines which pods will receive traffic from this service
+  selector:
+    app: vatfilingpricingtool
+    component: api
+  # No session affinity for the external-facing service
+  sessionAffinity: None
+---
+# Define the internal API service for intra-component communication
+apiVersion: v1
+kind: Service
+metadata:
+  name: vatfilingpricingtool-api-internal
+  namespace: vatfilingpricingtool
+  labels:
+    app: vatfilingpricingtool
+    component: api-internal
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+  annotations:
+    description: "Internal backend API service for the VAT Filing Pricing Tool"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "80"
+    prometheus.io/path: "/metrics"
+spec:
+  # ClusterIP makes the service only reachable from within the cluster
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+  # Selector determines which pods will receive traffic from this service
+  selector:
+    app: vatfilingpricingtool
+    component: api
+  # Use ClientIP session affinity for the internal service to maintain session stickiness
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800 # 3 hours
