@@ -1,0 +1,331 @@
+name: $(Build.SourceBranchName)-security-$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - src/**
+      - .azuredevops/pipelines/security-scan.yml
+
+schedules:
+  - cron: "0 0 * * 0"
+    displayName: Weekly Security Scan
+    branches:
+      include:
+        - main
+        - develop
+    always: true
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - src/**
+
+variables:
+  buildConfiguration: 'Release'
+  vmImageName: 'ubuntu-latest'
+  dotnetVersion: '6.0.x'
+  nodeVersion: '16.x'
+  backendSolution: 'src/backend/VatFilingPricingTool.sln'
+  webProject: 'src/web/VatFilingPricingTool.Web/VatFilingPricingTool.Web.csproj'
+  acrName: '$(ACR_NAME)'
+  backendImageName: 'vatfilingpricingtool-backend'
+  webImageName: 'vatfilingpricingtool-web'
+
+resources:
+  pipelines:
+    - pipeline: 'Build'
+      source: 'VatFilingPricingTool-Build'
+      trigger:
+        branches:
+          include:
+            - main
+            - develop
+
+stages:
+  - stage: CodeAnalysis
+    displayName: 'Static Code Analysis'
+    jobs:
+      - job: SonarCloudAnalysis
+        displayName: 'SonarCloud Security Analysis'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: UseDotNet@2
+            displayName: 'Use .NET Core SDK $(dotnetVersion)'
+            inputs:
+              version: $(dotnetVersion)
+              includePreviewVersions: false
+          
+          - task: SonarCloudPrepare@1
+            displayName: 'Prepare SonarCloud Analysis'
+            inputs:
+              SonarCloud: 'SonarCloud'
+              organization: 'vatfilingpricingtool'
+              scannerMode: 'MSBuild'
+              projectKey: 'VatFilingPricingTool'
+              projectName: 'VAT Filing Pricing Tool'
+              extraProperties: |
+                sonar.cs.opencover.reportsPaths=$(Build.SourcesDirectory)/**/coverage.opencover.xml
+                sonar.cs.vstest.reportsPaths=$(Agent.TempDirectory)/*.trx
+                sonar.exclusions=**/obj/**,**/bin/**,**/wwwroot/lib/**
+                sonar.coverage.exclusions=**/*.Tests.cs,**/Tests/**
+                sonar.security.enabled=true
+          
+          - task: DotNetCoreCLI@2
+            displayName: 'Restore NuGet packages'
+            inputs:
+              command: 'restore'
+              projects: '$(backendSolution)'
+              feedsToUse: 'select'
+              verbosityRestore: 'Normal'
+          
+          - task: DotNetCoreCLI@2
+            displayName: 'Build solution'
+            inputs:
+              command: 'build'
+              projects: '$(backendSolution)'
+              arguments: '--configuration $(buildConfiguration) --no-restore'
+          
+          - task: DotNetCoreCLI@2
+            displayName: 'Run tests with coverage'
+            inputs:
+              command: 'test'
+              projects: 'src/backend/Tests/**/*.csproj'
+              arguments: '--configuration $(buildConfiguration) --no-build --collect:"XPlat Code Coverage" --logger trx --results-directory $(Agent.TempDirectory) -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover'
+              publishTestResults: true
+          
+          - task: SonarCloudAnalyze@1
+            displayName: 'Run SonarCloud Analysis'
+          
+          - task: SonarCloudPublish@1
+            displayName: 'Publish SonarCloud Results'
+            inputs:
+              pollingTimeoutSec: '300'
+          
+          - task: PowerShell@2
+            displayName: 'Check for security issues'
+            inputs:
+              targetType: 'inline'
+              script: |
+                # Check SonarCloud quality gate status
+                $sonarQubeResult = Invoke-RestMethod -Uri "https://sonarcloud.io/api/qualitygates/project_status?projectKey=VatFilingPricingTool" -Headers @{"Authorization" = "Bearer $(SONARCLOUD_TOKEN)"}
+
+                if ($sonarQubeResult.projectStatus.status -ne "OK") {
+                    Write-Host "##vso[task.logissue type=warning]SonarCloud quality gate failed. Security issues may exist."
+                    $securityIssues = Invoke-RestMethod -Uri "https://sonarcloud.io/api/issues/search?projectKeys=VatFilingPricingTool&types=VULNERABILITY&ps=100" -Headers @{"Authorization" = "Bearer $(SONARCLOUD_TOKEN)"}
+                    
+                    if ($securityIssues.issues.Count -gt 0) {
+                        Write-Host "##vso[task.logissue type=error]$($securityIssues.issues.Count) security vulnerabilities found:"
+                        foreach ($issue in $securityIssues.issues) {
+                            Write-Host "##vso[task.logissue type=error]$($issue.severity) - $($issue.message) in $($issue.component)"
+                        }
+                        
+                        if ($securityIssues.issues | Where-Object { $_.severity -eq 'BLOCKER' -or $_.severity -eq 'CRITICAL' }) {
+                            Write-Host "##vso[task.complete result=Failed;]Critical security vulnerabilities found."
+                        }
+                    }
+                }
+
+  - stage: DependencyScan
+    displayName: 'Dependency Scanning'
+    jobs:
+      - job: ScanDependencies
+        displayName: 'Scan Dependencies for Vulnerabilities'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: UseDotNet@2
+            displayName: 'Use .NET Core SDK $(dotnetVersion)'
+            inputs:
+              version: $(dotnetVersion)
+              includePreviewVersions: false
+          
+          - task: DotNetCoreCLI@2
+            displayName: 'Install .NET security tools'
+            inputs:
+              command: 'custom'
+              custom: 'tool'
+              arguments: 'install --global dotnet-retire'
+          
+          - task: DotNetCoreCLI@2
+            displayName: 'Restore NuGet packages'
+            inputs:
+              command: 'restore'
+              projects: '$(backendSolution)'
+              feedsToUse: 'select'
+              verbosityRestore: 'Normal'
+          
+          - task: PowerShell@2
+            displayName: 'Run dotnet-retire'
+            inputs:
+              targetType: 'inline'
+              script: 'dotnet retire --targetdir src/backend/ --outputdir $(Build.ArtifactStagingDirectory)/dependency-scan'
+          
+          - task: NodeTool@0
+            displayName: 'Install Node.js $(nodeVersion)'
+            inputs:
+              versionSpec: $(nodeVersion)
+          
+          - task: PowerShell@2
+            displayName: 'Run npm audit'
+            inputs:
+              targetType: 'inline'
+              script: |
+                cd src/web
+                npm ci
+                npm audit --json > $(Build.ArtifactStagingDirectory)/dependency-scan/npm-audit.json || true
+
+                # Check for high or critical vulnerabilities
+                $npmAudit = Get-Content $(Build.ArtifactStagingDirectory)/dependency-scan/npm-audit.json | ConvertFrom-Json
+                $highVulnerabilities = $npmAudit.vulnerabilities | Get-Member -MemberType NoteProperty | Where-Object { $npmAudit.vulnerabilities.($_.Name).severity -eq 'high' -or $npmAudit.vulnerabilities.($_.Name).severity -eq 'critical' }
+
+                if ($highVulnerabilities) {
+                    Write-Host "##vso[task.logissue type=warning]High or critical npm vulnerabilities found:"
+                    foreach ($vuln in $highVulnerabilities) {
+                        $vulnerability = $npmAudit.vulnerabilities.($vuln.Name)
+                        Write-Host "##vso[task.logissue type=warning]$($vulnerability.severity) - $($vuln.Name) - $($vulnerability.via[0].title)"
+                    }
+                }
+          
+          - task: WhiteSource@21
+            displayName: 'WhiteSource Bolt'
+            inputs:
+              cwd: '$(Build.SourcesDirectory)'
+              projectName: 'VAT Filing Pricing Tool'
+          
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish dependency scan results'
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)/dependency-scan'
+              ArtifactName: 'dependency-scan-results'
+              publishLocation: 'Container'
+
+  - stage: ContainerScan
+    displayName: 'Container Image Scanning'
+    dependsOn: []
+    jobs:
+      - job: ScanContainerImages
+        displayName: 'Scan Container Images for Vulnerabilities'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: AzureCLI@2
+            displayName: 'Login to Azure Container Registry'
+            inputs:
+              azureSubscription: '$(AZURE_SUBSCRIPTION)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: 'az acr login --name $(acrName)'
+          
+          - task: PowerShell@2
+            displayName: 'Install Trivy'
+            inputs:
+              targetType: 'inline'
+              script: |
+                # Install Trivy
+                wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+                echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee -a /etc/apt/sources.list.d/trivy.list
+                sudo apt-get update
+                sudo apt-get install -y trivy
+          
+          - task: PowerShell@2
+            displayName: 'Extract branch name'
+            inputs:
+              targetType: 'inline'
+              script: |
+                # Extract branch name from Build.SourceBranch
+                $branchName = "$(Build.SourceBranch)" -replace "refs/heads/", ""
+                Write-Host "##vso[task.setvariable variable=branchName]$branchName"
+          
+          - task: PowerShell@2
+            displayName: 'Scan backend container image'
+            inputs:
+              targetType: 'inline'
+              script: |
+                mkdir -p $(Build.ArtifactStagingDirectory)/container-scan
+
+                # Scan backend image
+                trivy image --format json --output $(Build.ArtifactStagingDirectory)/container-scan/backend-vulnerabilities.json $(acrName).azurecr.io/$(backendImageName):$(branchName)-latest
+
+                # Generate HTML report
+                trivy image --format template --template "@contrib/html.tpl" --output $(Build.ArtifactStagingDirectory)/container-scan/backend-vulnerabilities.html $(acrName).azurecr.io/$(backendImageName):$(branchName)-latest
+
+                # Check for high or critical vulnerabilities
+                $scanResults = Get-Content $(Build.ArtifactStagingDirectory)/container-scan/backend-vulnerabilities.json | ConvertFrom-Json
+                $criticalVulnerabilities = $scanResults.Results | ForEach-Object { $_.Vulnerabilities | Where-Object { $_.Severity -eq 'CRITICAL' -or $_.Severity -eq 'HIGH' } }
+
+                if ($criticalVulnerabilities) {
+                    Write-Host "##vso[task.logissue type=warning]Critical or high vulnerabilities found in backend image:"
+                    $criticalVulnerabilities | ForEach-Object {
+                        Write-Host "##vso[task.logissue type=warning]$($_.Severity) - $($_.VulnerabilityID) - $($_.Title)"
+                    }
+                }
+          
+          - task: PowerShell@2
+            displayName: 'Scan web container image'
+            inputs:
+              targetType: 'inline'
+              script: |
+                # Scan web image
+                trivy image --format json --output $(Build.ArtifactStagingDirectory)/container-scan/web-vulnerabilities.json $(acrName).azurecr.io/$(webImageName):$(branchName)-latest
+
+                # Generate HTML report
+                trivy image --format template --template "@contrib/html.tpl" --output $(Build.ArtifactStagingDirectory)/container-scan/web-vulnerabilities.html $(acrName).azurecr.io/$(webImageName):$(branchName)-latest
+
+                # Check for high or critical vulnerabilities
+                $scanResults = Get-Content $(Build.ArtifactStagingDirectory)/container-scan/web-vulnerabilities.json | ConvertFrom-Json
+                $criticalVulnerabilities = $scanResults.Results | ForEach-Object { $_.Vulnerabilities | Where-Object { $_.Severity -eq 'CRITICAL' -or $_.Severity -eq 'HIGH' } }
+
+                if ($criticalVulnerabilities) {
+                    Write-Host "##vso[task.logissue type=warning]Critical or high vulnerabilities found in web image:"
+                    $criticalVulnerabilities | ForEach-Object {
+                        Write-Host "##vso[task.logissue type=warning]$($_.Severity) - $($_.VulnerabilityID) - $($_.Title)"
+                    }
+                }
+          
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish container scan results'
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)/container-scan'
+              ArtifactName: 'container-scan-results'
+              publishLocation: 'Container'
+
+  - stage: InfrastructureScan
+    displayName: 'Infrastructure Security Scanning'
+    dependsOn: []
+    jobs:
+      - job: ScanInfrastructureAsCode
+        displayName: 'Scan Infrastructure as Code'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: PowerShell@2
+            displayName: 'Install Checkov'
+            inputs:
+              targetType: 'inline'
+              script: 'pip install checkov'
+          
+          - task: PowerShell@2
+            displayName: 'Scan Terraform files'
+            inputs:
+              targetType: 'inline'
+              script: |
+                mkdir -p $(Build.ArtifactStagingDirectory)/infrastructure-scan
+
+                # Scan Terraform files
+                checkov -d infrastructure/azure/terraform --output json --output-file-path $(Build.ArtifactStagingDirectory)/infrastructure-scan/terraform-scan.json
+          
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish infrastructure scan results'
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)/infrastructure-scan'
+              ArtifactName: 'infrastructure-scan-results'
+              publishLocation: 'Container'
