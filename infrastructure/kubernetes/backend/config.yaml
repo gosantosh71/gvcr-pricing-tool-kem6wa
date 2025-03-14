@@ -1,0 +1,278 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vatfilingpricingtool-api-config
+  namespace: vatfilingpricingtool
+  labels:
+    app: vatfilingpricingtool
+    component: api
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+  annotations:
+    description: "Configuration for the VAT Filing Pricing Tool API"
+    last-updated: "${CURRENT_DATE}"
+data:
+  appsettings.json: '{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft": "Warning",
+      "Microsoft.Hosting.Lifetime": "Information",
+      "Microsoft.EntityFrameworkCore.Database.Command": "Warning"
+    },
+    "Console": {
+      "IncludeScopes": true
+    },
+    "ApplicationInsights": {
+      "LogLevel": {
+        "Default": "Information"
+      }
+    }
+  },
+  "Cors": {
+    "AllowedOrigins": ["https://${FRONTEND_HOST}"],
+    "AllowedMethods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "AllowedHeaders": ["Content-Type", "Authorization", "X-Correlation-ID"],
+    "AllowCredentials": true
+  },
+  "Swagger": {
+    "Enabled": ${ENABLE_SWAGGER},
+    "Title": "VAT Filing Pricing Tool API",
+    "Description": "API for the VAT Filing Pricing Tool",
+    "Version": "v1",
+    "ContactName": "Support Team",
+    "ContactEmail": "support@vatfilingpricingtool.com"
+  },
+  "FeatureManagement": {
+    "OcrDocumentProcessing": ${ENABLE_OCR_PROCESSING},
+    "ErpIntegration": ${ENABLE_ERP_INTEGRATION},
+    "AdvancedReporting": ${ENABLE_ADVANCED_REPORTING},
+    "MultiCountryCalculation": true,
+    "DeveloperTools": ${ENABLE_DEVELOPER_TOOLS}
+  },
+  "AzureMonitor": {
+    "MetricsEnabled": true,
+    "LogsEnabled": true,
+    "AlertsEnabled": true,
+    "DiagnosticSettingsEnabled": true
+  }
+}'
+  countries.json: '[
+  {
+    "countryCode": "GB",
+    "name": "United Kingdom",
+    "standardVatRate": 20.0,
+    "currencyCode": "GBP",
+    "isActive": true
+  },
+  {
+    "countryCode": "DE",
+    "name": "Germany",
+    "standardVatRate": 19.0,
+    "currencyCode": "EUR",
+    "isActive": true
+  },
+  {
+    "countryCode": "FR",
+    "name": "France",
+    "standardVatRate": 20.0,
+    "currencyCode": "EUR",
+    "isActive": true
+  },
+  {
+    "countryCode": "ES",
+    "name": "Spain",
+    "standardVatRate": 21.0,
+    "currencyCode": "EUR",
+    "isActive": true
+  },
+  {
+    "countryCode": "IT",
+    "name": "Italy",
+    "standardVatRate": 22.0,
+    "currencyCode": "EUR",
+    "isActive": true
+  }
+]'
+  services.json: '[
+  {
+    "serviceId": "standard-filing",
+    "name": "Standard Filing",
+    "description": "Basic VAT filing service with standard processing time",
+    "basePrice": 500.0,
+    "isActive": true,
+    "complexityLevel": 1
+  },
+  {
+    "serviceId": "complex-filing",
+    "name": "Complex Filing",
+    "description": "Advanced VAT filing service for businesses with complex requirements",
+    "basePrice": 800.0,
+    "isActive": true,
+    "complexityLevel": 2
+  },
+  {
+    "serviceId": "priority-service",
+    "name": "Priority Service",
+    "description": "Expedited VAT filing service with priority processing",
+    "basePrice": 1200.0,
+    "isActive": true,
+    "complexityLevel": 3
+  }
+]'
+  additionalServices.json: '[
+  {
+    "serviceId": "tax-consultancy",
+    "name": "Tax Consultancy",
+    "description": "Expert tax advice and consultation services",
+    "cost": 300.0,
+    "isActive": true
+  },
+  {
+    "serviceId": "historical-data",
+    "name": "Historical Data Processing",
+    "description": "Processing and analysis of historical VAT data",
+    "cost": 250.0,
+    "isActive": true
+  },
+  {
+    "serviceId": "reconciliation",
+    "name": "Reconciliation Services",
+    "description": "Reconciliation of VAT accounts and transactions",
+    "cost": 350.0,
+    "isActive": true
+  },
+  {
+    "serviceId": "audit-support",
+    "name": "Audit Support",
+    "description": "Support during VAT audits and inspections",
+    "cost": 400.0,
+    "isActive": true
+  }
+]'
+  rules.json: '[
+  {
+    "ruleId": "UK-VAT-001",
+    "countryCode": "GB",
+    "ruleType": "VatRate",
+    "name": "UK Standard VAT Rate",
+    "expression": "basePrice * 0.20",
+    "effectiveFrom": "2023-01-01",
+    "effectiveTo": null,
+    "priority": 100
+  },
+  {
+    "ruleId": "DE-VAT-001",
+    "countryCode": "DE",
+    "ruleType": "VatRate",
+    "name": "Germany Standard VAT Rate",
+    "expression": "basePrice * 0.19",
+    "effectiveFrom": "2023-01-01",
+    "effectiveTo": null,
+    "priority": 100
+  },
+  {
+    "ruleId": "FR-VAT-001",
+    "countryCode": "FR",
+    "ruleType": "VatRate",
+    "name": "France Standard VAT Rate",
+    "expression": "basePrice * 0.20",
+    "effectiveFrom": "2023-01-01",
+    "effectiveTo": null,
+    "priority": 100
+  },
+  {
+    "ruleId": "VOLUME-DISCOUNT-001",
+    "countryCode": "*",
+    "ruleType": "Discount",
+    "name": "Volume Discount Tier 1",
+    "expression": "totalCost * 0.05",
+    "effectiveFrom": "2023-01-01",
+    "effectiveTo": null,
+    "priority": 200,
+    "conditions": [
+      {
+        "parameter": "transactionVolume",
+        "operator": "greaterThan",
+        "value": 500
+      },
+      {
+        "parameter": "transactionVolume",
+        "operator": "lessThanOrEqual",
+        "value": 1000
+      }
+    ]
+  },
+  {
+    "ruleId": "VOLUME-DISCOUNT-002",
+    "countryCode": "*",
+    "ruleType": "Discount",
+    "name": "Volume Discount Tier 2",
+    "expression": "totalCost * 0.10",
+    "effectiveFrom": "2023-01-01",
+    "effectiveTo": null,
+    "priority": 201,
+    "conditions": [
+      {
+        "parameter": "transactionVolume",
+        "operator": "greaterThan",
+        "value": 1000
+      }
+    ]
+  },
+  {
+    "ruleId": "MULTI-COUNTRY-DISCOUNT",
+    "countryCode": "*",
+    "ruleType": "Discount",
+    "name": "Multi-Country Discount",
+    "expression": "totalCost * 0.03 * (countryCount - 1)",
+    "effectiveFrom": "2023-01-01",
+    "effectiveTo": null,
+    "priority": 300,
+    "conditions": [
+      {
+        "parameter": "countryCount",
+        "operator": "greaterThan",
+        "value": 1
+      }
+    ]
+  }
+]'
+  email-templates.json: '{
+  "welcome": {
+    "subject": "Welcome to VAT Filing Pricing Tool",
+    "template": "<html><body><h1>Welcome to VAT Filing Pricing Tool</h1><p>Dear {{UserName}},</p><p>Thank you for registering with VAT Filing Pricing Tool. We\'re excited to help you manage your VAT filing costs efficiently.</p></body></html>"
+  },
+  "password-reset": {
+    "subject": "Password Reset Request",
+    "template": "<html><body><h1>Password Reset Request</h1><p>Dear {{UserName}},</p><p>We received a request to reset your password. Please click the link below to reset your password:</p><p><a href=\'{{ResetLink}}\'>Reset Password</a></p></body></html>"
+  },
+  "calculation-complete": {
+    "subject": "VAT Filing Cost Calculation Complete",
+    "template": "<html><body><h1>Calculation Complete</h1><p>Dear {{UserName}},</p><p>Your VAT filing cost calculation is now complete. The estimated cost is {{TotalCost}}.</p><p>You can view the detailed breakdown by <a href=\'{{DetailsLink}}\'>clicking here</a>.</p></body></html>"
+  },
+  "report-ready": {
+    "subject": "Your VAT Filing Report is Ready",
+    "template": "<html><body><h1>Report Ready</h1><p>Dear {{UserName}},</p><p>Your requested VAT filing report is now ready. You can download it by <a href=\'{{DownloadLink}}\'>clicking here</a>.</p></body></html>"
+  }
+}'
+  report-templates.json: '{
+  "standard-report": {
+    "name": "Standard Report",
+    "description": "Basic report with cost breakdown by country",
+    "template": "standard-report-template.html",
+    "supportedFormats": ["PDF", "Excel"]
+  },
+  "detailed-report": {
+    "name": "Detailed Report",
+    "description": "Comprehensive report with detailed cost breakdown and analysis",
+    "template": "detailed-report-template.html",
+    "supportedFormats": ["PDF", "Excel"]
+  },
+  "executive-summary": {
+    "name": "Executive Summary",
+    "description": "Concise summary of VAT filing costs for executive review",
+    "template": "executive-summary-template.html",
+    "supportedFormats": ["PDF"]
+  }
+}'
