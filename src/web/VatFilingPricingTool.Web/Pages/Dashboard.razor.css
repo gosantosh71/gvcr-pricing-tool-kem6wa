@@ -1,0 +1,115 @@
+/* Dashboard Container */
+.dashboard-container {
+    padding: 20px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+/* Dashboard Title */
+.dashboard-title {
+    margin-bottom: 20px;
+    font-size: 1.8rem;
+    color: var(--text-color);
+    font-weight: 500;
+}
+
+/* Dashboard Grid Layout */
+.dashboard-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+/* Dashboard Row */
+.dashboard-row {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+/* Dashboard Column */
+.dashboard-column {
+    flex: 1;
+    min-width: 300px;
+    background-color: var(--background-color);
+    border-radius: 4px;
+    box-shadow: var(--shadow-md);
+    transition: box-shadow 0.3s ease;
+}
+
+/* Dashboard Column Hover Effect */
+.dashboard-column:hover {
+    box-shadow: var(--shadow-lg);
+}
+
+/* Full Width Column */
+.full-width {
+    flex-basis: 100%;
+}
+
+/* Loading Indicator */
+.loading-indicator {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 200px;
+}
+
+/* Error Message */
+.error-message {
+    color: var(--error-color);
+    padding: 15px;
+    background-color: #f8d7da;
+    border-radius: 4px;
+    margin-bottom: 20px;
+}
+
+/* Responsive Layout - Mobile */
+@media (max-width: 768px) {
+    .dashboard-row {
+        flex-direction: column;
+    }
+    
+    .dashboard-column {
+        min-width: 100%;
+    }
+    
+    .dashboard-title {
+        font-size: 1.5rem;
+    }
+    
+    .dashboard-container {
+        padding: 15px;
+    }
+}
+
+/* Responsive Layout - Tablet */
+@media (min-width: 769px) and (max-width: 1024px) {
+    .dashboard-column {
+        min-width: 250px;
+    }
+    
+    .dashboard-container {
+        padding: 15px;
+    }
+}
+
+/* Accessibility - Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+    .dashboard-column {
+        transition: none;
+    }
+}
+
+/* Print Styles */
+@media print {
+    .dashboard-column {
+        box-shadow: none;
+        border: 1px solid var(--border-color);
+        break-inside: avoid;
+    }
+    
+    .dashboard-grid {
+        gap: 15px;
+    }
+}
