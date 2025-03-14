@@ -1,0 +1,268 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vatfilingpricingtool-api
+  namespace: vatfilingpricingtool
+  labels:
+    app: vatfilingpricingtool
+    component: api
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+  annotations:
+    description: "Backend API deployment for the VAT Filing Pricing Tool"
+    kubernetes.io/change-cause: "Initial deployment of VAT Filing Pricing Tool API"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "80"
+    prometheus.io/path: "/metrics"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: vatfilingpricingtool
+      component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  minReadySeconds: 30
+  revisionHistoryLimit: 10
+  template:
+    metadata:
+      labels:
+        app: vatfilingpricingtool
+        component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "80"
+        prometheus.io/path: "/metrics"
+    spec:
+      imagePullSecrets:
+        - name: acr-auth
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: api
+          image: ${ACR_NAME}.azurecr.io/vatfilingpricingtool/api:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health/startup
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 30
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: ${ENVIRONMENT}
+            - name: ASPNETCORE_URLS
+              value: "http://+:80"
+            - name: TZ
+              value: "UTC"
+            - name: ConnectionStrings__SqlDatabase
+              valueFrom:
+                secretKeyRef:
+                  name: vatfilingpricingtool-secrets
+                  key: sql-connection-string
+            - name: ConnectionStrings__CosmosDb
+              valueFrom:
+                secretKeyRef:
+                  name: vatfilingpricingtool-secrets
+                  key: cosmos-connection-string
+            - name: ConnectionStrings__RedisCache
+              valueFrom:
+                secretKeyRef:
+                  name: vatfilingpricingtool-secrets
+                  key: redis-connection-string
+            - name: ConnectionStrings__BlobStorage
+              valueFrom:
+                secretKeyRef:
+                  name: vatfilingpricingtool-secrets
+                  key: storage-connection-string
+            - name: Authentication__AzureAd__TenantId
+              valueFrom:
+                secretKeyRef:
+                  name: vatfilingpricingtool-secrets
+                  key: azure-ad-tenant-id
+            - name: Authentication__AzureAd__ClientId
+              valueFrom:
+                secretKeyRef:
+                  name: vatfilingpricingtool-secrets
+                  key: azure-ad-client-id
+            - name: Authentication__AzureAd__ClientSecret
+              valueFrom:
+                secretKeyRef:
+                  name: vatfilingpricingtool-secrets
+                  key: azure-ad-client-secret
+            - name: ApplicationInsights__InstrumentationKey
+              valueFrom:
+                secretKeyRef:
+                  name: vatfilingpricingtool-secrets
+                  key: appinsights-instrumentation-key
+            - name: Authentication__JwtKey
+              valueFrom:
+                secretKeyRef:
+                  name: vatfilingpricingtool-secrets
+                  key: jwt-secret-key
+            - name: Integration__Erp__ApiKey
+              valueFrom:
+                secretKeyRef:
+                  name: vatfilingpricingtool-secrets
+                  key: erp-api-key
+            - name: Integration__Ocr__ApiKey
+              valueFrom:
+                secretKeyRef:
+                  name: vatfilingpricingtool-secrets
+                  key: ocr-api-key
+            - name: Integration__Email__ApiKey
+              valueFrom:
+                secretKeyRef:
+                  name: vatfilingpricingtool-secrets
+                  key: email-api-key
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config
+            - name: logs-volume
+              mountPath: /app/logs
+            - name: tmp-volume
+              mountPath: /tmp
+      volumes:
+        - name: config-volume
+          configMap:
+            name: vatfilingpricingtool-api-config
+        - name: logs-volume
+          persistentVolumeClaim:
+            claimName: vatfilingpricingtool-api-logs-pvc
+        - name: tmp-volume
+          emptyDir: {}
+      nodeSelector:
+        kubernetes.io/os: linux
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - vatfilingpricingtool
+                    - key: component
+                      operator: In
+                      values:
+                        - api
+                topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 60
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vatfilingpricingtool-api-logs-pvc
+  namespace: vatfilingpricingtool
+  labels:
+    app: vatfilingpricingtool
+    component: api
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: azure-file
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vatfilingpricingtool-api-hpa
+  namespace: vatfilingpricingtool
+  labels:
+    app: vatfilingpricingtool
+    component: api
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vatfilingpricingtool-api
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vatfilingpricingtool-api-pdb
+  namespace: vatfilingpricingtool
+  labels:
+    app: vatfilingpricingtool
+    component: api
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+spec:
+  minAvailable: 50%
+  selector:
+    matchLabels:
+      app: vatfilingpricingtool
+      component: api
