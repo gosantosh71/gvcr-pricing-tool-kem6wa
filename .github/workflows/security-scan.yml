@@ -1,0 +1,304 @@
+name: Security Scanning
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - '.github/workflows/security-scan.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+  schedule:
+    - cron: '0 0 * * 0'  # Run at midnight every Sunday
+  workflow_dispatch:  # Allow manual triggering
+
+env:
+  DOTNET_VERSION: '6.0.x'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  NODE_VERSION: '16.x'
+  ACR_NAME: 'vatfilingpricingtoolacr'
+  BACKEND_IMAGE_NAME: 'vatfilingpricingtool-backend'
+  WEB_IMAGE_NAME: 'vatfilingpricingtool-web'
+
+jobs:
+  code_scanning:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: '0'
+      
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: csharp, javascript
+          queries: security-extended, security-and-quality
+      
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v2
+      
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+        with:
+          category: code-scanning
+
+  dependency_scanning:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      
+      - name: Install .NET security tools
+        run: |
+          dotnet tool install --global dotnet-retire
+          dotnet tool install --global dotnet-outdated-tool
+      
+      - name: Run .NET dependency scanning
+        run: |
+          dotnet restore src/backend/VatFilingPricingTool.sln
+          dotnet retire --targetdir src/backend/ --outputdir ./dependency-scan-results
+      
+      - name: Check for outdated packages
+        run: |
+          dotnet outdated src/backend/VatFilingPricingTool.sln -o ./dependency-scan-results/outdated-packages.json --version-lock Major
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Install npm-audit-resolver
+        run: npm install -g npm-audit-resolver
+      
+      - name: Run npm dependency scanning
+        run: |
+          cd src/web && npm audit --json > ../../dependency-scan-results/npm-audit.json || true
+      
+      - name: Upload dependency scanning results
+        uses: actions/upload-artifact@v3
+        with:
+          name: dependency-scan-results
+          path: ./dependency-scan-results
+          retention-days: 7
+
+  container_scanning:
+    runs-on: ubuntu-latest
+    needs: [dependency_scanning]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      
+      - name: Login to Azure Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.ACR_NAME }}.azurecr.io
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+      
+      - name: Extract branch name
+        shell: bash
+        run: echo "BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_ENV
+      
+      - name: Scan backend container image
+        uses: aquasecurity/trivy-action@0.10.0
+        with:
+          image-ref: ${{ env.ACR_NAME }}.azurecr.io/${{ env.BACKEND_IMAGE_NAME }}:${{ env.BRANCH_NAME }}-latest
+          format: sarif
+          output: trivy-backend-results.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          ignore-unfixed: true
+      
+      - name: Scan web container image
+        uses: aquasecurity/trivy-action@0.10.0
+        with:
+          image-ref: ${{ env.ACR_NAME }}.azurecr.io/${{ env.WEB_IMAGE_NAME }}:${{ env.BRANCH_NAME }}-latest
+          format: sarif
+          output: trivy-web-results.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          ignore-unfixed: true
+      
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: trivy-backend-results.sarif
+          category: container-scanning-backend
+      
+      - name: Upload Trivy scan results for web
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: trivy-web-results.sarif
+          category: container-scanning-web
+      
+      - name: Generate HTML report for backend
+        run: |
+          trivy image --format template --template "@/usr/local/share/trivy/templates/html.tpl" -o trivy-backend-results.html ${{ env.ACR_NAME }}.azurecr.io/${{ env.BACKEND_IMAGE_NAME }}:${{ env.BRANCH_NAME }}-latest
+      
+      - name: Generate HTML report for web
+        run: |
+          trivy image --format template --template "@/usr/local/share/trivy/templates/html.tpl" -o trivy-web-results.html ${{ env.ACR_NAME }}.azurecr.io/${{ env.WEB_IMAGE_NAME }}:${{ env.BRANCH_NAME }}-latest
+      
+      - name: Upload HTML reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: container-scan-reports
+          path: trivy-*-results.html
+          retention-days: 7
+
+  secret_scanning:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: '0'
+      
+      - name: Install Gitleaks
+        run: |
+          wget https://github.com/zricethezav/gitleaks/releases/download/v8.15.0/gitleaks_8.15.0_linux_x64.tar.gz
+          tar -xzf gitleaks_8.15.0_linux_x64.tar.gz
+          chmod +x gitleaks
+          sudo mv gitleaks /usr/local/bin/
+      
+      - name: Run Gitleaks
+        run: |
+          gitleaks detect --source . --report-format json --report-path gitleaks-report.json || true
+      
+      - name: Check for secrets
+        run: |
+          if [ -s gitleaks-report.json ]; then
+            echo "Potential secrets found in the repository. Check the report for details."
+          else
+            echo "No secrets found in the repository."
+          fi
+      
+      - name: Upload Gitleaks report
+        uses: actions/upload-artifact@v3
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.json
+          retention-days: 7
+        if: always()
+
+  infrastructure_scanning:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Install Checkov
+        run: pip install checkov
+      
+      - name: Scan Terraform files
+        run: |
+          checkov -d infrastructure/azure/terraform --output cli --output sarif --output-file-path terraform-scan-results.sarif || true
+      
+      - name: Scan ARM templates
+        run: |
+          checkov -d infrastructure/azure/arm-templates --output cli --output sarif --output-file-path arm-scan-results.sarif || true
+      
+      - name: Scan Kubernetes manifests
+        run: |
+          checkov -d infrastructure/kubernetes --output cli --output sarif --output-file-path kubernetes-scan-results.sarif || true
+      
+      - name: Upload Terraform scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: terraform-scan-results.sarif
+          category: infrastructure-terraform
+        if: hashFiles('terraform-scan-results.sarif') != ''
+      
+      - name: Upload ARM scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: arm-scan-results.sarif
+          category: infrastructure-arm
+        if: hashFiles('arm-scan-results.sarif') != ''
+      
+      - name: Upload Kubernetes scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: kubernetes-scan-results.sarif
+          category: infrastructure-kubernetes
+        if: hashFiles('kubernetes-scan-results.sarif') != ''
+      
+      - name: Upload all infrastructure scan results
+        uses: actions/upload-artifact@v3
+        with:
+          name: infrastructure-scan-results
+          path: '*-scan-results.sarif'
+          retention-days: 7
+        if: always()
+
+  security_report:
+    runs-on: ubuntu-latest
+    needs: [code_scanning, dependency_scanning, container_scanning, secret_scanning, infrastructure_scanning]
+    if: always()
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Download all scan results
+        uses: actions/download-artifact@v3
+        with:
+          path: ./scan-results
+      
+      - name: Generate security report
+        run: |
+          echo "# Security Scan Report - $(date)" > security-report.md
+          echo "\n## Summary\n" >> security-report.md
+          echo "This report contains the results of automated security scanning for the VAT Filing Pricing Tool." >> security-report.md
+          
+          echo "\n## Code Scanning Results\n" >> security-report.md
+          echo "CodeQL analysis completed with status: ${{ needs.code_scanning.result }}" >> security-report.md
+          
+          echo "\n## Dependency Scanning Results\n" >> security-report.md
+          if [ -f "./scan-results/dependency-scan-results/npm-audit.json" ]; then
+            echo "NPM vulnerabilities found: $(cat ./scan-results/dependency-scan-results/npm-audit.json | grep -o '"vulnerabilities":' | wc -l)" >> security-report.md
+          fi
+          
+          echo "\n## Container Scanning Results\n" >> security-report.md
+          echo "Backend image scan status: $(ls -la ./scan-results/container-scan-reports/trivy-backend-results.html 2>/dev/null || echo 'No results')" >> security-report.md
+          echo "Web image scan status: $(ls -la ./scan-results/container-scan-reports/trivy-web-results.html 2>/dev/null || echo 'No results')" >> security-report.md
+          
+          echo "\n## Secret Scanning Results\n" >> security-report.md
+          if [ -f "./scan-results/gitleaks-report/gitleaks-report.json" ]; then
+            echo "Potential secrets found: $(cat ./scan-results/gitleaks-report/gitleaks-report.json | grep -o '"Description"' | wc -l)" >> security-report.md
+          else
+            echo "No secrets found" >> security-report.md
+          fi
+          
+          echo "\n## Infrastructure Scanning Results\n" >> security-report.md
+          echo "Infrastructure scan completed with status: ${{ needs.infrastructure_scanning.result }}" >> security-report.md
+      
+      - name: Upload security report
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-report
+          path: security-report.md
+          retention-days: 30
+      
+      - name: Post security summary
+        run: echo "::notice::Security scanning completed. Download the security-report artifact for detailed results."
