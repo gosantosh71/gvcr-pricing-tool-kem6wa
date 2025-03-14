@@ -1,0 +1,310 @@
+parameters:
+  # Required parameters
+  - name: environment
+    type: string
+    displayName: Deployment environment (dev, staging, prod)
+  - name: azureSubscription
+    type: string
+    displayName: Azure subscription service connection name
+  - name: keyVaultName
+    type: string
+    displayName: Name of the Azure Key Vault containing secrets
+  - name: acrName
+    type: string
+    displayName: Name of the Azure Container Registry
+  - name: terraformBackendResourceGroup
+    type: string
+    displayName: Resource group containing Terraform backend storage
+  - name: terraformBackendStorageAccount
+    type: string
+    displayName: Storage account for Terraform state
+  - name: terraformBackendContainer
+    type: string
+    displayName: Storage container for Terraform state
+  - name: terraformBackendKey
+    type: string
+    displayName: Key for Terraform state file
+  - name: terraformVersion
+    type: string
+    displayName: Version of Terraform to install
+  - name: terraformVarFile
+    type: string
+    displayName: Path to Terraform variables file
+  - name: backendImageName
+    type: string
+    displayName: Name of the backend Docker image
+  - name: webImageName
+    type: string
+    displayName: Name of the web frontend Docker image
+  - name: buildId
+    type: string
+    displayName: Build ID to deploy
+  - name: deploymentStrategy
+    type: string
+    displayName: Deployment strategy (rolling, canary, blueGreen)
+  
+  # Optional parameters with defaults
+  - name: canaryPercentage
+    type: string
+    default: '20'
+    displayName: Percentage of traffic for canary deployment
+  - name: requireApproval
+    type: boolean
+    default: false
+    displayName: Whether to require manual approval before deployment
+  - name: approvalTimeoutInMinutes
+    type: number
+    default: 4320 # 3 days
+    displayName: Timeout for approval in minutes
+  - name: approvalNotificationEmails
+    type: string
+    default: ''
+    displayName: Email addresses for approval notifications
+  - name: runValidation
+    type: boolean
+    default: true
+    displayName: Whether to run post-deployment validation
+
+steps:
+  # Download build artifacts
+  - task: DownloadBuildArtifacts@0
+    displayName: 'Download Build Artifacts'
+    inputs:
+      buildType: 'specific'
+      project: '$(System.TeamProject)'
+      pipeline: '$(resources.pipeline.Build.pipelineName)'
+      buildVersionToDownload: 'specific'
+      buildId: '${{ parameters.buildId }}'
+      downloadType: 'single'
+      artifactName: 'drop'
+      downloadPath: '$(System.ArtifactsDirectory)'
+
+  # Manual approval gate (conditional)
+  - task: ManualValidation@0
+    displayName: 'Approve Deployment to ${{ parameters.environment }}'
+    condition: ${{ parameters.requireApproval }}
+    inputs:
+      notifyUsers: '${{ parameters.approvalNotificationEmails }}'
+      instructions: 'Please validate and approve the deployment to ${{ parameters.environment }} environment.'
+      timeoutInMinutes: '${{ parameters.approvalTimeoutInMinutes }}'
+
+  # Install Terraform
+  - task: TerraformInstaller@0
+    displayName: 'Install Terraform ${{ parameters.terraformVersion }}'
+    inputs:
+      terraformVersion: '${{ parameters.terraformVersion }}'
+  
+  # Retrieve secrets from Key Vault
+  - task: AzureKeyVault@2
+    displayName: 'Retrieve secrets from Key Vault'
+    inputs:
+      azureSubscription: '${{ parameters.azureSubscription }}'
+      KeyVaultName: '${{ parameters.keyVaultName }}'
+      SecretsFilter: '*'
+      RunAsPreJob: true
+
+  # Initialize Terraform
+  - task: TerraformTaskV2@2
+    displayName: 'Terraform Init'
+    inputs:
+      provider: 'azurerm'
+      command: 'init'
+      workingDirectory: '$(System.DefaultWorkingDirectory)/infrastructure/azure/terraform'
+      backendServiceArm: '${{ parameters.azureSubscription }}'
+      backendAzureRmResourceGroupName: '${{ parameters.terraformBackendResourceGroup }}'
+      backendAzureRmStorageAccountName: '${{ parameters.terraformBackendStorageAccount }}'
+      backendAzureRmContainerName: '${{ parameters.terraformBackendContainer }}'
+      backendAzureRmKey: '${{ parameters.terraformBackendKey }}'
+
+  # Plan Terraform changes
+  - task: TerraformTaskV2@2
+    displayName: 'Terraform Plan'
+    inputs:
+      provider: 'azurerm'
+      command: 'plan'
+      workingDirectory: '$(System.DefaultWorkingDirectory)/infrastructure/azure/terraform'
+      commandOptions: '-var-file="${{ parameters.terraformVarFile }}" -var="environment=${{ parameters.environment }}" -out=tfplan'
+      environmentServiceNameAzureRM: '${{ parameters.azureSubscription }}'
+
+  # Apply Terraform changes
+  - task: TerraformTaskV2@2
+    displayName: 'Terraform Apply'
+    inputs:
+      provider: 'azurerm'
+      command: 'apply'
+      workingDirectory: '$(System.DefaultWorkingDirectory)/infrastructure/azure/terraform'
+      commandOptions: 'tfplan'
+      environmentServiceNameAzureRM: '${{ parameters.azureSubscription }}'
+
+  # Get AKS credentials
+  - task: AzureCLI@2
+    displayName: 'Get AKS Credentials'
+    inputs:
+      azureSubscription: '${{ parameters.azureSubscription }}'
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      inlineScript: 'az aks get-credentials --resource-group rg-vatfilingpricingtool-${{ parameters.environment }} --name aks-vatfilingpricingtool-${{ parameters.environment }} --overwrite-existing'
+
+  # Create Kubernetes namespace and configure registry auth
+  - task: KubernetesManifest@0
+    displayName: 'Create Kubernetes Namespace'
+    inputs:
+      action: 'createSecret'
+      kubernetesServiceConnection: 'aks-vatfilingpricingtool-${{ parameters.environment }}'
+      namespace: 'vatfilingpricingtool'
+      secretType: 'dockerRegistry'
+      secretName: 'acr-auth'
+      dockerRegistryEndpoint: '${{ parameters.acrName }}'
+
+  # Deploy backend config
+  - task: KubernetesManifest@0
+    displayName: 'Deploy Backend Config'
+    inputs:
+      action: 'deploy'
+      kubernetesServiceConnection: 'aks-vatfilingpricingtool-${{ parameters.environment }}'
+      namespace: 'vatfilingpricingtool'
+      manifests: '$(System.DefaultWorkingDirectory)/infrastructure/kubernetes/backend/config.yaml'
+      containers: '${{ parameters.acrName }}.azurecr.io/${{ parameters.backendImageName }}:$(Build.BuildId)'
+
+  # Create backend secrets
+  - task: PowerShell@2
+    displayName: 'Create Backend Secrets'
+    inputs:
+      targetType: 'inline'
+      script: |
+        kubectl create secret generic vatfilingpricingtool-secrets \
+          --namespace vatfilingpricingtool \
+          --from-literal=sql-connection-string="$(SQL-CONNECTION-STRING)" \
+          --from-literal=cosmos-connection-string="$(COSMOS-CONNECTION-STRING)" \
+          --from-literal=redis-connection-string="$(REDIS-CONNECTION-STRING)" \
+          --from-literal=storage-connection-string="$(STORAGE-CONNECTION-STRING)" \
+          --from-literal=azure-ad-tenant-id="$(AZURE-AD-TENANT-ID)" \
+          --from-literal=azure-ad-client-id="$(AZURE-AD-CLIENT-ID)" \
+          --from-literal=azure-ad-client-secret="$(AZURE-AD-CLIENT-SECRET)" \
+          --from-literal=appinsights-instrumentation-key="$(APPINSIGHTS-INSTRUMENTATION-KEY)" \
+          --from-literal=jwt-secret-key="$(JWT-SECRET-KEY)" \
+          --from-literal=erp-api-key="$(ERP-API-KEY)" \
+          --from-literal=ocr-api-key="$(OCR-API-KEY)" \
+          --from-literal=email-api-key="$(EMAIL-API-KEY)" \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+  # Deploy backend
+  - task: KubernetesManifest@0
+    displayName: 'Deploy Backend'
+    inputs:
+      action: 'deploy'
+      kubernetesServiceConnection: 'aks-vatfilingpricingtool-${{ parameters.environment }}'
+      namespace: 'vatfilingpricingtool'
+      manifests: '$(System.DefaultWorkingDirectory)/infrastructure/kubernetes/backend/deployment.yaml,$(System.DefaultWorkingDirectory)/infrastructure/kubernetes/backend/service.yaml'
+      containers: '${{ parameters.acrName }}.azurecr.io/${{ parameters.backendImageName }}:$(Build.BuildId)'
+      strategy: '${{ parameters.deploymentStrategy }}'
+
+  # Deploy web config
+  - task: KubernetesManifest@0
+    displayName: 'Deploy Web Config'
+    inputs:
+      action: 'deploy'
+      kubernetesServiceConnection: 'aks-vatfilingpricingtool-${{ parameters.environment }}'
+      namespace: 'vatfilingpricingtool'
+      manifests: '$(System.DefaultWorkingDirectory)/infrastructure/kubernetes/web/config.yaml'
+      containers: '${{ parameters.acrName }}.azurecr.io/${{ parameters.webImageName }}:$(Build.BuildId)'
+
+  # Deploy web application
+  - task: KubernetesManifest@0
+    displayName: 'Deploy Web'
+    inputs:
+      action: 'deploy'
+      kubernetesServiceConnection: 'aks-vatfilingpricingtool-${{ parameters.environment }}'
+      namespace: 'vatfilingpricingtool'
+      manifests: '$(System.DefaultWorkingDirectory)/infrastructure/kubernetes/web/deployment.yaml,$(System.DefaultWorkingDirectory)/infrastructure/kubernetes/web/service.yaml,$(System.DefaultWorkingDirectory)/infrastructure/kubernetes/web/ingress.yaml'
+      containers: '${{ parameters.acrName }}.azurecr.io/${{ parameters.webImageName }}:$(Build.BuildId)'
+      strategy: '${{ parameters.deploymentStrategy }}'
+
+  # Configure canary deployment if strategy is canary
+  - task: KubernetesManifest@0
+    displayName: 'Configure Canary Deployment'
+    condition: "and(succeeded(), eq('${{ parameters.deploymentStrategy }}', 'canary'))"
+    inputs:
+      action: 'promote'
+      kubernetesServiceConnection: 'aks-vatfilingpricingtool-${{ parameters.environment }}'
+      namespace: 'vatfilingpricingtool'
+      manifests: '$(System.DefaultWorkingDirectory)/infrastructure/kubernetes/backend/deployment.yaml,$(System.DefaultWorkingDirectory)/infrastructure/kubernetes/web/deployment.yaml'
+      containers: '${{ parameters.acrName }}.azurecr.io/${{ parameters.backendImageName }}:$(Build.BuildId),${{ parameters.acrName }}.azurecr.io/${{ parameters.webImageName }}:$(Build.BuildId)'
+      strategy: 'canary'
+      percentage: '${{ parameters.canaryPercentage }}'
+
+  # Validate deployment if runValidation is true
+  - task: PowerShell@2
+    displayName: 'Validate Deployment'
+    condition: '${{ parameters.runValidation }}'
+    inputs:
+      targetType: 'inline'
+      script: |
+        # Check if backend pods are running
+        $backendPods = kubectl get pods -n vatfilingpricingtool -l app=vatfilingpricingtool,component=api -o jsonpath='{.items[*].status.phase}'
+        if ($backendPods -notmatch 'Running') {
+            Write-Error "Backend pods are not in Running state: $backendPods"
+            exit 1
+        }
+
+        # Check if web pods are running
+        $webPods = kubectl get pods -n vatfilingpricingtool -l app=vatfilingpricingtool,component=web -o jsonpath='{.items[*].status.phase}'
+        if ($webPods -notmatch 'Running') {
+            Write-Error "Web pods are not in Running state: $webPods"
+            exit 1
+        }
+
+        # Check backend health endpoint
+        $backendService = kubectl get service vatfilingpricingtool-api -n vatfilingpricingtool -o jsonpath='{.spec.clusterIP}'
+        $backendHealth = kubectl run curl --image=curlimages/curl --restart=Never --rm --quiet -i -- curl -s http://$backendService/health/ready
+        if ($backendHealth -notmatch 'Healthy') {
+            Write-Error "Backend health check failed: $backendHealth"
+            exit 1
+        }
+
+        # Check web health endpoint
+        $webService = kubectl get service vatfilingpricingtool-web -n vatfilingpricingtool -o jsonpath='{.spec.clusterIP}'
+        $webHealth = kubectl run curl --image=curlimages/curl --restart=Never --rm --quiet -i -- curl -s http://$webService/health
+        if ($webHealth -notmatch 'Healthy') {
+            Write-Error "Web health check failed: $webHealth"
+            exit 1
+        }
+
+        Write-Host "Deployment validation successful"
+
+  # Promote canary to stable if strategy is canary
+  - task: KubernetesManifest@0
+    displayName: 'Promote Canary to Stable'
+    condition: "and(succeeded(), eq('${{ parameters.deploymentStrategy }}', 'canary'))"
+    inputs:
+      action: 'promote'
+      kubernetesServiceConnection: 'aks-vatfilingpricingtool-${{ parameters.environment }}'
+      namespace: 'vatfilingpricingtool'
+      manifests: '$(System.DefaultWorkingDirectory)/infrastructure/kubernetes/backend/deployment.yaml,$(System.DefaultWorkingDirectory)/infrastructure/kubernetes/web/deployment.yaml'
+      containers: '${{ parameters.acrName }}.azurecr.io/${{ parameters.backendImageName }}:$(Build.BuildId),${{ parameters.acrName }}.azurecr.io/${{ parameters.webImageName }}:$(Build.BuildId)'
+      strategy: 'canary'
+      percentage: '100'
+
+  # Deployment summary
+  - task: PowerShell@2
+    displayName: 'Deployment Summary'
+    inputs:
+      targetType: 'inline'
+      script: |
+        Write-Host "##[section]Deployment Summary"
+        Write-Host "Environment: ${{ parameters.environment }}"
+        Write-Host "Deployment Strategy: ${{ parameters.deploymentStrategy }}"
+        Write-Host "Backend Image: ${{ parameters.acrName }}.azurecr.io/${{ parameters.backendImageName }}:$(Build.BuildId)"
+        Write-Host "Web Image: ${{ parameters.acrName }}.azurecr.io/${{ parameters.webImageName }}:$(Build.BuildId)"
+
+        # Get service endpoints
+        $ingressIP = kubectl get ingress vatfilingpricingtool-ingress -n vatfilingpricingtool -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+        Write-Host "Application URL: https://$ingressIP"
+
+        # Get pod counts
+        $backendPods = kubectl get pods -n vatfilingpricingtool -l app=vatfilingpricingtool,component=api --no-headers | Measure-Object | Select-Object -ExpandProperty Count
+        $webPods = kubectl get pods -n vatfilingpricingtool -l app=vatfilingpricingtool,component=web --no-headers | Measure-Object | Select-Object -ExpandProperty Count
+        Write-Host "Backend Pods: $backendPods"
+        Write-Host "Web Pods: $webPods"
+
+        Write-Host "Deployment completed successfully!"
