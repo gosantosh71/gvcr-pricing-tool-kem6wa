@@ -1,0 +1,749 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "environmentName": {
+            "type": "string",
+            "allowedValues": ["dev", "staging", "prod"],
+            "metadata": {
+                "description": "Name of the environment (dev, staging, prod)"
+            }
+        },
+        "location": {
+            "type": "string",
+            "defaultValue": "westeurope",
+            "metadata": {
+                "description": "Primary Azure region for resource deployment"
+            }
+        },
+        "secondaryLocation": {
+            "type": "string",
+            "defaultValue": "northeurope",
+            "metadata": {
+                "description": "Secondary Azure region for disaster recovery"
+            }
+        },
+        "appName": {
+            "type": "string",
+            "defaultValue": "vatfilingpricingtool",
+            "metadata": {
+                "description": "Name of the application"
+            }
+        },
+        "sqlAdminLogin": {
+            "type": "string",
+            "metadata": {
+                "description": "SQL Server administrator login"
+            }
+        },
+        "sqlAdminPassword": {
+            "type": "securestring",
+            "metadata": {
+                "description": "SQL Server administrator password"
+            }
+        },
+        "keyVaultAccessPolicies": {
+            "type": "array",
+            "defaultValue": [],
+            "metadata": {
+                "description": "Array of access policies for Key Vault"
+            }
+        },
+        "appServicePlanSku": {
+            "type": "object",
+            "defaultValue": {
+                "name": "P2v3",
+                "tier": "PremiumV3",
+                "size": "P2v3",
+                "family": "Pv3",
+                "capacity": 1
+            },
+            "metadata": {
+                "description": "SKU for App Service Plan"
+            }
+        },
+        "aksNodeCount": {
+            "type": "int",
+            "defaultValue": 3,
+            "minValue": 1,
+            "maxValue": 10,
+            "metadata": {
+                "description": "Number of nodes in AKS cluster"
+            }
+        },
+        "aksNodeSize": {
+            "type": "string",
+            "defaultValue": "Standard_D4s_v3",
+            "metadata": {
+                "description": "VM size for AKS nodes"
+            }
+        },
+        "sqlDatabaseSku": {
+            "type": "object",
+            "defaultValue": {
+                "name": "BC_Gen5_8",
+                "tier": "BusinessCritical",
+                "family": "Gen5",
+                "capacity": 8
+            },
+            "metadata": {
+                "description": "SKU for SQL Database"
+            }
+        },
+        "cosmosThroughput": {
+            "type": "int",
+            "defaultValue": 400,
+            "minValue": 400,
+            "maxValue": 1000000,
+            "metadata": {
+                "description": "Throughput for Cosmos DB"
+            }
+        },
+        "redisCacheSku": {
+            "type": "object",
+            "defaultValue": {
+                "name": "Premium",
+                "family": "P",
+                "capacity": 1
+            },
+            "metadata": {
+                "description": "SKU for Redis Cache"
+            }
+        },
+        "storageAccountType": {
+            "type": "string",
+            "defaultValue": "Standard_GRS",
+            "allowedValues": [
+                "Standard_LRS",
+                "Standard_GRS",
+                "Standard_RAGRS",
+                "Standard_ZRS",
+                "Premium_LRS",
+                "Premium_ZRS"
+            ],
+            "metadata": {
+                "description": "Storage Account type"
+            }
+        },
+        "apiManagementSku": {
+            "type": "string",
+            "defaultValue": "Standard",
+            "allowedValues": [
+                "Developer",
+                "Basic",
+                "Standard",
+                "Premium"
+            ],
+            "metadata": {
+                "description": "SKU for API Management"
+            }
+        },
+        "tags": {
+            "type": "object",
+            "defaultValue": {
+                "Environment": "dev",
+                "Application": "VAT Filing Pricing Tool",
+                "Owner": "Finance Department",
+                "CostCenter": "Finance-IT",
+                "Project": "VAT Filing Pricing Tool",
+                "Compliance": "GDPR, SOC2, ISO27001"
+            },
+            "metadata": {
+                "description": "Resource tags"
+            }
+        }
+    },
+    "variables": {
+        "resourceNamePrefix": "[concat(parameters('appName'), '-', parameters('environmentName'))]",
+        "keyVaultName": "[concat(variables('resourceNamePrefix'), '-kv')]",
+        "sqlServerName": "[concat(variables('resourceNamePrefix'), '-sql')]",
+        "sqlDatabaseName": "VatFilingPricingTool",
+        "cosmosDbAccountName": "[concat(variables('resourceNamePrefix'), '-cosmos')]",
+        "cosmosDbDatabaseName": "VatFilingPricingTool",
+        "redisCacheName": "[concat(variables('resourceNamePrefix'), '-redis')]",
+        "storageAccountName": "[replace(concat(variables('resourceNamePrefix'), 'sa'), '-', '')]",
+        "appServicePlanName": "[concat(variables('resourceNamePrefix'), '-asp')]",
+        "appServiceName": "[concat(variables('resourceNamePrefix'), '-app')]",
+        "aksClusterName": "[concat(variables('resourceNamePrefix'), '-aks')]",
+        "apiManagementName": "[concat(variables('resourceNamePrefix'), '-apim')]",
+        "frontDoorName": "[concat(variables('resourceNamePrefix'), '-fd')]",
+        "logAnalyticsWorkspaceName": "[concat(variables('resourceNamePrefix'), '-law')]",
+        "appInsightsName": "[concat(variables('resourceNamePrefix'), '-ai')]",
+        "deploymentNames": {
+            "keyVault": "[concat(deployment().name, '-keyvault')]",
+            "storage": "[concat(deployment().name, '-storage')]",
+            "sql": "[concat(deployment().name, '-sql')]",
+            "cosmosDb": "[concat(deployment().name, '-cosmosdb')]",
+            "redis": "[concat(deployment().name, '-redis')]",
+            "appService": "[concat(deployment().name, '-appservice')]",
+            "aks": "[concat(deployment().name, '-aks')]",
+            "apiManagement": "[concat(deployment().name, '-apim')]",
+            "frontDoor": "[concat(deployment().name, '-frontdoor')]",
+            "monitor": "[concat(deployment().name, '-monitor')]"
+        }
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "[variables('deploymentNames').monitor]",
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "relativePath": "monitor.json"
+                },
+                "parameters": {
+                    "logAnalyticsWorkspaceName": {
+                        "value": "[variables('logAnalyticsWorkspaceName')]"
+                    },
+                    "appInsightsName": {
+                        "value": "[variables('appInsightsName')]"
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    },
+                    "tags": {
+                        "value": "[parameters('tags')]"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "[variables('deploymentNames').keyVault]",
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "relativePath": "keyvault.json"
+                },
+                "parameters": {
+                    "keyVaultName": {
+                        "value": "[variables('keyVaultName')]"
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    },
+                    "accessPolicies": {
+                        "value": "[parameters('keyVaultAccessPolicies')]"
+                    },
+                    "sku": {
+                        "value": "Standard"
+                    },
+                    "enabledForDeployment": {
+                        "value": true
+                    },
+                    "enabledForTemplateDeployment": {
+                        "value": true
+                    },
+                    "enabledForDiskEncryption": {
+                        "value": true
+                    },
+                    "enableRbacAuthorization": {
+                        "value": false
+                    },
+                    "enableSoftDelete": {
+                        "value": true
+                    },
+                    "softDeleteRetentionInDays": {
+                        "value": 90
+                    },
+                    "tags": {
+                        "value": "[parameters('tags')]"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "[variables('deploymentNames').storage]",
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "relativePath": "storage.json"
+                },
+                "parameters": {
+                    "storageAccountName": {
+                        "value": "[variables('storageAccountName')]"
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    },
+                    "accountType": {
+                        "value": "[parameters('storageAccountType')]"
+                    },
+                    "containerNames": {
+                        "value": ["reports", "templates", "documents"]
+                    },
+                    "tags": {
+                        "value": "[parameters('tags')]"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "[variables('deploymentNames').sql]",
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "relativePath": "sql.json"
+                },
+                "parameters": {
+                    "sqlServerName": {
+                        "value": "[variables('sqlServerName')]"
+                    },
+                    "sqlDatabaseName": {
+                        "value": "[variables('sqlDatabaseName')]"
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    },
+                    "secondaryLocation": {
+                        "value": "[parameters('secondaryLocation')]"
+                    },
+                    "administratorLogin": {
+                        "value": "[parameters('sqlAdminLogin')]"
+                    },
+                    "administratorLoginPassword": {
+                        "value": "[parameters('sqlAdminPassword')]"
+                    },
+                    "databaseSku": {
+                        "value": "[parameters('sqlDatabaseSku')]"
+                    },
+                    "maxSizeBytes": {
+                        "value": 34359738368
+                    },
+                    "zoneRedundant": {
+                        "value": true
+                    },
+                    "enableAuditing": {
+                        "value": true
+                    },
+                    "auditingRetentionDays": {
+                        "value": 30
+                    },
+                    "enableThreatDetection": {
+                        "value": true
+                    },
+                    "enableVulnerabilityAssessment": {
+                        "value": true
+                    },
+                    "storageAccountName": {
+                        "value": "[variables('storageAccountName')]"
+                    },
+                    "allowAzureIps": {
+                        "value": true
+                    },
+                    "tags": {
+                        "value": "[parameters('tags')]"
+                    }
+                },
+                "dependsOn": [
+                    "[variables('deploymentNames').storage]"
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "[variables('deploymentNames').cosmosDb]",
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "relativePath": "cosmosdb.json"
+                },
+                "parameters": {
+                    "accountName": {
+                        "value": "[variables('cosmosDbAccountName')]"
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    },
+                    "secondaryLocation": {
+                        "value": "[parameters('secondaryLocation')]"
+                    },
+                    "databaseName": {
+                        "value": "[variables('cosmosDbDatabaseName')]"
+                    },
+                    "throughput": {
+                        "value": "[parameters('cosmosThroughput')]"
+                    },
+                    "enableAutomaticFailover": {
+                        "value": true
+                    },
+                    "enableMultipleWriteLocations": {
+                        "value": true
+                    },
+                    "enableServerless": {
+                        "value": false
+                    },
+                    "enableAnalyticalStorage": {
+                        "value": false
+                    },
+                    "backupPolicyType": {
+                        "value": "Continuous"
+                    },
+                    "backupRetentionInHours": {
+                        "value": 720
+                    },
+                    "tags": {
+                        "value": "[parameters('tags')]"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "[variables('deploymentNames').redis]",
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "relativePath": "redis.json"
+                },
+                "parameters": {
+                    "redisCacheName": {
+                        "value": "[variables('redisCacheName')]"
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    },
+                    "redisCacheSku": {
+                        "value": "[parameters('redisCacheSku')]"
+                    },
+                    "enableNonSslPort": {
+                        "value": false
+                    },
+                    "minimumTlsVersion": {
+                        "value": "1.2"
+                    },
+                    "tags": {
+                        "value": "[parameters('tags')]"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "[variables('deploymentNames').appService]",
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "relativePath": "appservice.json"
+                },
+                "parameters": {
+                    "appServicePlanName": {
+                        "value": "[variables('appServicePlanName')]"
+                    },
+                    "appServiceName": {
+                        "value": "[variables('appServiceName')]"
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    },
+                    "appServicePlanSku": {
+                        "value": "[parameters('appServicePlanSku')]"
+                    },
+                    "appSettings": {
+                        "value": {
+                            "APPINSIGHTS_INSTRUMENTATIONKEY": "[reference(variables('deploymentNames').monitor).outputs.appInsightsInstrumentationKey.value]",
+                            "APPLICATIONINSIGHTS_CONNECTION_STRING": "[concat('InstrumentationKey=', reference(variables('deploymentNames').monitor).outputs.appInsightsInstrumentationKey.value)]",
+                            "ApplicationInsightsAgent_EXTENSION_VERSION": "~2",
+                            "ASPNETCORE_ENVIRONMENT": "[parameters('environmentName')]",
+                            "KeyVaultUri": "[reference(variables('deploymentNames').keyVault).outputs.keyVaultUri.value]",
+                            "SqlConnectionString": "[reference(variables('deploymentNames').sql).outputs.failoverGroupConnectionString.value]",
+                            "CosmosDbConnectionString": "[reference(variables('deploymentNames').cosmosDb).outputs.cosmosDbConnectionString.value]",
+                            "RedisConnectionString": "[reference(variables('deploymentNames').redis).outputs.redisConnectionString.value]",
+                            "BlobStorageConnectionString": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';AccountKey=', listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2021-09-01').keys[0].value, ';EndpointSuffix=core.windows.net')]"
+                        }
+                    },
+                    "alwaysOn": {
+                        "value": true
+                    },
+                    "netFrameworkVersion": {
+                        "value": "v6.0"
+                    },
+                    "tags": {
+                        "value": "[parameters('tags')]"
+                    }
+                },
+                "dependsOn": [
+                    "[variables('deploymentNames').monitor]",
+                    "[variables('deploymentNames').keyVault]",
+                    "[variables('deploymentNames').sql]",
+                    "[variables('deploymentNames').cosmosDb]",
+                    "[variables('deploymentNames').redis]",
+                    "[variables('deploymentNames').storage]"
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "[variables('deploymentNames').aks]",
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "relativePath": "aks.json"
+                },
+                "parameters": {
+                    "aksClusterName": {
+                        "value": "[variables('aksClusterName')]"
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    },
+                    "nodeCount": {
+                        "value": "[parameters('aksNodeCount')]"
+                    },
+                    "nodeSize": {
+                        "value": "[parameters('aksNodeSize')]"
+                    },
+                    "kubernetesVersion": {
+                        "value": "1.24.9"
+                    },
+                    "enableAutoScaling": {
+                        "value": true
+                    },
+                    "minNodeCount": {
+                        "value": 3
+                    },
+                    "maxNodeCount": {
+                        "value": 10
+                    },
+                    "enableAvailabilityZones": {
+                        "value": true
+                    },
+                    "networkPlugin": {
+                        "value": "azure"
+                    },
+                    "tags": {
+                        "value": "[parameters('tags')]"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "[variables('deploymentNames').apiManagement]",
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "relativePath": "api-management.json"
+                },
+                "parameters": {
+                    "apiManagementName": {
+                        "value": "[variables('apiManagementName')]"
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    },
+                    "sku": {
+                        "value": "[parameters('apiManagementSku')]"
+                    },
+                    "capacity": {
+                        "value": 1
+                    },
+                    "publisherEmail": {
+                        "value": "admin@vatfilingpricingtool.com"
+                    },
+                    "publisherName": {
+                        "value": "VAT Filing Pricing Tool"
+                    },
+                    "virtualNetworkType": {
+                        "value": "External"
+                    },
+                    "tags": {
+                        "value": "[parameters('tags')]"
+                    }
+                },
+                "dependsOn": [
+                    "[variables('deploymentNames').monitor]"
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "[variables('deploymentNames').frontDoor]",
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "relativePath": "front-door.json"
+                },
+                "parameters": {
+                    "frontDoorName": {
+                        "value": "[variables('frontDoorName')]"
+                    },
+                    "backendPools": {
+                        "value": [
+                            {
+                                "name": "appServiceBackend",
+                                "backends": [
+                                    {
+                                        "address": "[reference(variables('deploymentNames').appService).outputs.appServiceUrl.value]",
+                                        "httpPort": 80,
+                                        "httpsPort": 443,
+                                        "priority": 1,
+                                        "weight": 100
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "apiBackend",
+                                "backends": [
+                                    {
+                                        "address": "[reference(variables('deploymentNames').apiManagement).outputs.apiManagementUrl.value]",
+                                        "httpPort": 80,
+                                        "httpsPort": 443,
+                                        "priority": 1,
+                                        "weight": 100
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    "frontendEndpoints": {
+                        "value": [
+                            {
+                                "name": "defaultFrontend",
+                                "hostName": "[concat(variables('frontDoorName'), '.azurefd.net')]"
+                            }
+                        ]
+                    },
+                    "routingRules": {
+                        "value": [
+                            {
+                                "name": "appServiceRoute",
+                                "frontendEndpoints": ["defaultFrontend"],
+                                "acceptedProtocols": ["Http", "Https"],
+                                "patternsToMatch": ["/*"],
+                                "routeConfiguration": {
+                                    "forwardingProtocol": "HttpsOnly",
+                                    "backendPool": "appServiceBackend"
+                                },
+                                "enabledState": "Enabled"
+                            },
+                            {
+                                "name": "apiRoute",
+                                "frontendEndpoints": ["defaultFrontend"],
+                                "acceptedProtocols": ["Http", "Https"],
+                                "patternsToMatch": ["/api/*"],
+                                "routeConfiguration": {
+                                    "forwardingProtocol": "HttpsOnly",
+                                    "backendPool": "apiBackend"
+                                },
+                                "enabledState": "Enabled"
+                            }
+                        ]
+                    },
+                    "enableWAF": {
+                        "value": true
+                    },
+                    "tags": {
+                        "value": "[parameters('tags')]"
+                    }
+                },
+                "dependsOn": [
+                    "[variables('deploymentNames').appService]",
+                    "[variables('deploymentNames').apiManagement]"
+                ]
+            }
+        }
+    ],
+    "outputs": {
+        "keyVaultName": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').keyVault).outputs.keyVaultName.value]"
+        },
+        "keyVaultUri": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').keyVault).outputs.keyVaultUri.value]"
+        },
+        "sqlServerName": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').sql).outputs.sqlServerName.value]"
+        },
+        "sqlDatabaseName": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').sql).outputs.sqlDatabaseName.value]"
+        },
+        "sqlFailoverGroupName": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').sql).outputs.failoverGroupName.value]"
+        },
+        "sqlConnectionString": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').sql).outputs.failoverGroupConnectionString.value]"
+        },
+        "cosmosDbAccountName": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').cosmosDb).outputs.cosmosDbAccountName.value]"
+        },
+        "cosmosDbDatabaseName": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').cosmosDb).outputs.cosmosDbDatabaseName.value]"
+        },
+        "cosmosDbConnectionString": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').cosmosDb).outputs.cosmosDbConnectionString.value]"
+        },
+        "redisCacheName": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').redis).outputs.redisCacheName.value]"
+        },
+        "redisConnectionString": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').redis).outputs.redisConnectionString.value]"
+        },
+        "storageAccountName": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').storage).outputs.storageAccountName.value]"
+        },
+        "blobEndpoint": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').storage).outputs.blobEndpoint.value]"
+        },
+        "appServiceName": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').appService).outputs.appServiceName.value]"
+        },
+        "appServiceUrl": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').appService).outputs.appServiceUrl.value]"
+        },
+        "aksClusterName": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').aks).outputs.aksClusterName.value]"
+        },
+        "aksNodeResourceGroup": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').aks).outputs.aksNodeResourceGroup.value]"
+        },
+        "apiManagementUrl": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').apiManagement).outputs.apiManagementUrl.value]"
+        },
+        "apiManagementPortalUrl": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').apiManagement).outputs.portalUrl.value]"
+        },
+        "frontDoorEndpoint": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').frontDoor).outputs.frontDoorEndpoint.value]"
+        },
+        "logAnalyticsWorkspaceId": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').monitor).outputs.logAnalyticsWorkspaceId.value]"
+        },
+        "appInsightsInstrumentationKey": {
+            "type": "string",
+            "value": "[reference(variables('deploymentNames').monitor).outputs.appInsightsInstrumentationKey.value]"
+        }
+    }
+}
