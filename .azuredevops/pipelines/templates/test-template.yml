@@ -1,0 +1,127 @@
+# Azure DevOps Pipeline Template for Test Execution
+# Version: 1.0.0
+
+parameters:
+  # Path to the test projects to run
+  - name: testProjects
+    type: string
+    default: ''
+  # Build configuration for tests (Debug/Release)
+  - name: testConfiguration
+    type: string
+    default: 'Release'
+  # .NET SDK version to use for testing
+  - name: dotnetVersion
+    type: string
+    default: '6.0.x'
+  # Whether to publish test results to Azure DevOps
+  - name: publishResults
+    type: boolean
+    default: true
+  # Whether to publish code coverage results
+  - name: publishCoverage
+    type: boolean
+    default: true
+  # Minimum code coverage percentage required
+  - name: codeCoverageThreshold
+    type: number
+    default: 80
+  # Filter for specific test categories
+  - name: testCategory
+    type: string
+    default: ''
+  # Whether to run end-to-end tests
+  - name: runE2ETests
+    type: boolean
+    default: false
+  # Node.js version for E2E tests
+  - name: nodeVersion
+    type: string
+    default: '16.x'
+
+steps:
+  # Install .NET Core SDK for test execution
+  - task: UseDotNet@2
+    displayName: 'Use .NET Core SDK ${{ parameters.dotnetVersion }}'
+    inputs:
+      version: ${{ parameters.dotnetVersion }}
+      includePreviewVersions: false
+    condition: succeeded()
+
+  # Install Node.js if running E2E tests
+  - task: NodeTool@0
+    displayName: 'Install Node.js ${{ parameters.nodeVersion }}'
+    inputs:
+      versionSpec: ${{ parameters.nodeVersion }}
+    condition: ${{ parameters.runE2ETests }}
+
+  # Install Playwright browsers if running E2E tests
+  - task: PowerShell@2
+    displayName: 'Install Playwright browsers'
+    inputs:
+      targetType: 'inline'
+      script: |
+        npx playwright install --with-deps
+    condition: ${{ parameters.runE2ETests }}
+
+  # Run tests with coverage collection
+  - task: DotNetCoreCLI@2
+    displayName: 'Run tests with coverage'
+    inputs:
+      command: 'test'
+      projects: '${{ parameters.testProjects }}'
+      arguments: '--configuration ${{ parameters.testConfiguration }} --collect:"XPlat Code Coverage" --logger trx --results-directory $(Agent.TempDirectory) ${{ parameters.testCategory }} -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover'
+      publishTestResults: false
+
+  # Publish test results to Azure DevOps
+  - task: PublishTestResults@2
+    displayName: 'Publish test results'
+    inputs:
+      testResultsFormat: 'VSTest'
+      testResultsFiles: '**/*.trx'
+      searchFolder: '$(Agent.TempDirectory)'
+      mergeTestResults: true
+      testRunTitle: 'Tests - ${{ parameters.testProjects }}'
+      failTaskOnFailedTests: true
+    condition: ${{ parameters.publishResults }}
+
+  # Publish code coverage results to Azure DevOps
+  - task: PublishCodeCoverageResults@1
+    displayName: 'Publish code coverage'
+    inputs:
+      codeCoverageTool: 'Cobertura'
+      summaryFileLocation: '$(Agent.TempDirectory)/**/coverage.cobertura.xml'
+      reportDirectory: '$(Agent.TempDirectory)/**/coverage'
+      failIfCoverageEmpty: true
+    condition: ${{ parameters.publishCoverage }}
+
+  # Validate code coverage against threshold
+  - task: PowerShell@2
+    displayName: 'Validate code coverage threshold'
+    inputs:
+      targetType: 'inline'
+      script: |
+        # Find the coverage file
+        $coverageFile = Get-ChildItem -Path "$(Agent.TempDirectory)" -Filter "coverage.cobertura.xml" -Recurse | Select-Object -First 1 -ExpandProperty FullName
+
+        if (-not $coverageFile) {
+            Write-Error "Coverage file not found"
+            exit 1
+        }
+
+        # Parse the coverage file
+        $xml = [xml](Get-Content $coverageFile)
+        $lineRate = [double]$xml.coverage.line-rate
+        $coveragePercentage = [math]::Round($lineRate * 100, 2)
+
+        # Output the coverage percentage
+        Write-Host "Code coverage: $coveragePercentage%"
+
+        # Check if coverage meets the threshold
+        if ($coveragePercentage -lt ${{ parameters.codeCoverageThreshold }}) {
+            Write-Error "Code coverage ($coveragePercentage%) is below the threshold (${{ parameters.codeCoverageThreshold }}%)"
+            exit 1
+        } else {
+            Write-Host "##vso[task.complete result=Succeeded;]Code coverage meets threshold"
+        }
+    condition: ${{ parameters.publishCoverage }}
