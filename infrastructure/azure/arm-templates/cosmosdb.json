@@ -1,0 +1,410 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "accountName": {
+            "type": "string",
+            "metadata": {
+                "description": "Name of the Cosmos DB account"
+            }
+        },
+        "location": {
+            "type": "string",
+            "metadata": {
+                "description": "Primary location for the Cosmos DB account"
+            }
+        },
+        "secondaryLocation": {
+            "type": "string",
+            "metadata": {
+                "description": "Secondary location for disaster recovery"
+            }
+        },
+        "databaseName": {
+            "type": "string",
+            "defaultValue": "VatFilingPricingTool",
+            "metadata": {
+                "description": "Name of the Cosmos DB database"
+            }
+        },
+        "throughput": {
+            "type": "int",
+            "defaultValue": 400,
+            "minValue": 400,
+            "maxValue": 1000000,
+            "metadata": {
+                "description": "Throughput for the database (RU/s)"
+            }
+        },
+        "enableAutomaticFailover": {
+            "type": "bool",
+            "defaultValue": true,
+            "metadata": {
+                "description": "Enable automatic failover for the Cosmos DB account"
+            }
+        },
+        "enableMultipleWriteLocations": {
+            "type": "bool",
+            "defaultValue": true,
+            "metadata": {
+                "description": "Enable multi-region writes for the Cosmos DB account"
+            }
+        },
+        "enableServerless": {
+            "type": "bool",
+            "defaultValue": false,
+            "metadata": {
+                "description": "Enable serverless mode for the Cosmos DB account"
+            }
+        },
+        "enableAnalyticalStorage": {
+            "type": "bool",
+            "defaultValue": false,
+            "metadata": {
+                "description": "Enable analytical storage for the Cosmos DB account"
+            }
+        },
+        "backupPolicyType": {
+            "type": "string",
+            "defaultValue": "Continuous",
+            "allowedValues": [
+                "Periodic",
+                "Continuous"
+            ],
+            "metadata": {
+                "description": "Type of backup policy (Periodic or Continuous)"
+            }
+        },
+        "backupRetentionInHours": {
+            "type": "int",
+            "defaultValue": 720,
+            "minValue": 8,
+            "maxValue": 720,
+            "metadata": {
+                "description": "Backup retention in hours (for Continuous backup policy)"
+            }
+        },
+        "enablePrivateEndpoint": {
+            "type": "bool",
+            "defaultValue": false,
+            "metadata": {
+                "description": "Whether to create a private endpoint for the Cosmos DB account"
+            }
+        },
+        "subnetId": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Resource ID of the subnet for the private endpoint (required if enablePrivateEndpoint is true)"
+            }
+        },
+        "tags": {
+            "type": "object",
+            "defaultValue": {},
+            "metadata": {
+                "description": "Resource tags"
+            }
+        }
+    },
+    "variables": {
+        "consistencyPolicy": {
+            "defaultConsistencyLevel": "Session",
+            "maxStalenessPrefix": 100,
+            "maxIntervalInSeconds": 5
+        },
+        "capabilities": [
+            {
+                "name": "EnableServerless"
+            }
+        ],
+        "locations": [
+            {
+                "locationName": "[parameters('location')]",
+                "failoverPriority": 0,
+                "isZoneRedundant": true
+            },
+            {
+                "locationName": "[parameters('secondaryLocation')]",
+                "failoverPriority": 1,
+                "isZoneRedundant": true
+            }
+        ],
+        "privateEndpointName": "[concat(parameters('accountName'), '-pe')]",
+        "privateEndpointConnectionName": "[concat(parameters('accountName'), '-pec')]",
+        "privateDnsZoneName": "privatelink.documents.azure.com",
+        "privateDnsZoneGroupName": "[concat(parameters('accountName'), '-pdzg')]",
+        "containers": [
+            {
+                "name": "Rules",
+                "partitionKey": "/countryCode",
+                "uniqueKeyPolicy": {
+                    "uniqueKeys": [
+                        {
+                            "paths": [
+                                "/ruleId"
+                            ]
+                        }
+                    ]
+                },
+                "indexingPolicy": {
+                    "indexingMode": "consistent",
+                    "includedPaths": [
+                        {
+                            "path": "/countryCode/?"
+                        },
+                        {
+                            "path": "/ruleType/?"
+                        },
+                        {
+                            "path": "/effectiveFrom/?"
+                        },
+                        {
+                            "path": "/effectiveTo/?"
+                        }
+                    ],
+                    "excludedPaths": [
+                        {
+                            "path": "/description/?"
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "AuditLogs",
+                "partitionKey": "/userId",
+                "uniqueKeyPolicy": {
+                    "uniqueKeys": [
+                        {
+                            "paths": [
+                                "/eventId"
+                            ]
+                        }
+                    ]
+                },
+                "indexingPolicy": {
+                    "indexingMode": "consistent",
+                    "includedPaths": [
+                        {
+                            "path": "/userId/?"
+                        },
+                        {
+                            "path": "/eventType/?"
+                        },
+                        {
+                            "path": "/timestamp/?"
+                        }
+                    ],
+                    "excludedPaths": [
+                        {
+                            "path": "/details/?"
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "Configurations",
+                "partitionKey": "/configType",
+                "uniqueKeyPolicy": {
+                    "uniqueKeys": [
+                        {
+                            "paths": [
+                                "/configType",
+                                "/name"
+                            ]
+                        }
+                    ]
+                },
+                "indexingPolicy": {
+                    "indexingMode": "consistent",
+                    "includedPaths": [
+                        {
+                            "path": "/configType/?"
+                        },
+                        {
+                            "path": "/name/?"
+                        },
+                        {
+                            "path": "/version/?"
+                        }
+                    ],
+                    "excludedPaths": [
+                        {
+                            "path": "/value/?"
+                        }
+                    ]
+                }
+            }
+        ]
+    },
+    "resources": [
+        {
+            "type": "Microsoft.DocumentDB/databaseAccounts",
+            "apiVersion": "2022-05-15",
+            "name": "[parameters('accountName')]",
+            "location": "[parameters('location')]",
+            "tags": "[parameters('tags')]",
+            "kind": "GlobalDocumentDB",
+            "properties": {
+                "consistencyPolicy": "[variables('consistencyPolicy')]",
+                "locations": "[if(parameters('enableServerless'), take(variables('locations'), 1), variables('locations'))]",
+                "databaseAccountOfferType": "Standard",
+                "enableAutomaticFailover": "[parameters('enableAutomaticFailover')]",
+                "enableMultipleWriteLocations": "[and(parameters('enableMultipleWriteLocations'), not(parameters('enableServerless')))]",
+                "enableFreeTier": false,
+                "enableAnalyticalStorage": "[parameters('enableAnalyticalStorage')]",
+                "analyticalStorageConfiguration": {
+                    "schemaType": "WellDefined"
+                },
+                "backupPolicy": {
+                    "type": "[parameters('backupPolicyType')]",
+                    "continuousModeProperties": {
+                        "tier": "Continuous30Days"
+                    }
+                },
+                "capabilities": "[if(parameters('enableServerless'), variables('capabilities'), json('[]'))]",
+                "publicNetworkAccess": "[if(parameters('enablePrivateEndpoint'), 'Disabled', 'Enabled')]",
+                "enablePartitionMerge": true
+            }
+        },
+        {
+            "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
+            "apiVersion": "2022-05-15",
+            "name": "[concat(parameters('accountName'), '/', parameters('databaseName'))]",
+            "dependsOn": [
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+            ],
+            "properties": {
+                "resource": {
+                    "id": "[parameters('databaseName')]"
+                },
+                "options": {
+                    "throughput": "[if(parameters('enableServerless'), json('null'), parameters('throughput'))]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+            "apiVersion": "2022-05-15",
+            "name": "[concat(parameters('accountName'), '/', parameters('databaseName'), '/', variables('containers')[copyIndex()].name)]",
+            "dependsOn": [
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', parameters('accountName'), parameters('databaseName'))]"
+            ],
+            "copy": {
+                "name": "containerCopy",
+                "count": "[length(variables('containers'))]"
+            },
+            "properties": {
+                "resource": {
+                    "id": "[variables('containers')[copyIndex()].name]",
+                    "partitionKey": {
+                        "paths": [
+                            "[variables('containers')[copyIndex()].partitionKey]"
+                        ],
+                        "kind": "Hash"
+                    },
+                    "uniqueKeyPolicy": "[variables('containers')[copyIndex()].uniqueKeyPolicy]",
+                    "indexingPolicy": "[variables('containers')[copyIndex()].indexingPolicy]",
+                    "defaultTtl": -1
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Network/privateEndpoints",
+            "apiVersion": "2021-05-01",
+            "name": "[variables('privateEndpointName')]",
+            "location": "[parameters('location')]",
+            "tags": "[parameters('tags')]",
+            "condition": "[parameters('enablePrivateEndpoint')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+            ],
+            "properties": {
+                "privateLinkServiceConnections": [
+                    {
+                        "name": "[variables('privateEndpointConnectionName')]",
+                        "properties": {
+                            "privateLinkServiceId": "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]",
+                            "groupIds": [
+                                "Sql"
+                            ]
+                        }
+                    }
+                ],
+                "subnet": {
+                    "id": "[parameters('subnetId')]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones",
+            "apiVersion": "2020-06-01",
+            "name": "[variables('privateDnsZoneName')]",
+            "location": "global",
+            "tags": "[parameters('tags')]",
+            "condition": "[parameters('enablePrivateEndpoint')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('privateEndpointName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+            "apiVersion": "2020-06-01",
+            "name": "[concat(variables('privateDnsZoneName'), '/', variables('privateDnsZoneName'), '-link')]",
+            "location": "global",
+            "condition": "[parameters('enablePrivateEndpoint')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]",
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('privateEndpointName'))]"
+            ],
+            "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                    "id": "[reference(parameters('subnetId'), '2021-05-01', 'Full').properties.virtualNetwork.id]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+            "apiVersion": "2021-05-01",
+            "name": "[concat(variables('privateEndpointName'), '/', variables('privateDnsZoneGroupName'))]",
+            "location": "[parameters('location')]",
+            "condition": "[parameters('enablePrivateEndpoint')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('privateEndpointName'))]",
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
+            ],
+            "properties": {
+                "privateDnsZoneConfigs": [
+                    {
+                        "name": "config1",
+                        "properties": {
+                            "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
+                        }
+                    }
+                ]
+            }
+        }
+    ],
+    "outputs": {
+        "cosmosDbAccountName": {
+            "type": "string",
+            "value": "[parameters('accountName')]"
+        },
+        "cosmosDbDatabaseName": {
+            "type": "string",
+            "value": "[parameters('databaseName')]"
+        },
+        "cosmosDbConnectionString": {
+            "type": "string",
+            "value": "[listConnectionStrings(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')), '2022-05-15').connectionStrings[0].connectionString]"
+        },
+        "cosmosDbResourceId": {
+            "type": "string",
+            "value": "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+        },
+        "cosmosDbEndpoint": {
+            "type": "string",
+            "value": "[reference(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))).documentEndpoint]"
+        }
+    }
+}
