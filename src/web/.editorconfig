@@ -1,0 +1,48 @@
+# This file extends the root .editorconfig but provides specific rules
+# for web-specific file types used in the Blazor WebAssembly application
+
+root = false
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+# C# Razor files
+[*.razor]
+indent_size = 4
+tab_width = 4
+
+# HTML files
+[*.html]
+indent_size = 2
+tab_width = 2
+
+# CSS files
+[*.css]
+indent_size = 2
+tab_width = 2
+
+# JavaScript files
+[*.js]
+indent_size = 2
+tab_width = 2
+
+# TypeScript files
+[*.ts]
+indent_size = 2
+tab_width = 2
+
+# JSON files
+[*.json]
+indent_size = 2
+tab_width = 2
+
+# Markdown files - preserve trailing whitespace for line breaks
+[*.md]
+trim_trailing_whitespace = false
+
+# Project files
+[*.csproj]
+indent_size = 2
+tab_width = 2
