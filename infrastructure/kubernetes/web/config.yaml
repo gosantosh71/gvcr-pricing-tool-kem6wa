@@ -1,0 +1,219 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vatfilingpricingtool-web-config
+  namespace: vatfilingpricingtool
+  labels:
+    app: vatfilingpricingtool
+    component: web
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+  annotations:
+    description: "Configuration for the VAT Filing Pricing Tool Web UI"
+    last-updated: "${CURRENT_DATE}"
+data:
+  appsettings.json: |
+    {
+      "ApiConfiguration": {
+        "BaseUrl": "${API_BASE_URL}",
+        "ApiVersion": "v1",
+        "Timeout": 30,
+        "RetryCount": 3,
+        "RetryDelayMilliseconds": 1000,
+        "EnableCircuitBreaker": true,
+        "CircuitBreakerFailureThreshold": 0.5,
+        "CircuitBreakerSamplingDurationSeconds": 60,
+        "CircuitBreakerDurationOfBreakSeconds": 30,
+        "EnableRequestCompression": true,
+        "EnableResponseCompression": true
+      },
+      "AzureAd": {
+        "Authority": "https://login.microsoftonline.com/${TENANT_ID}",
+        "ClientId": "${CLIENT_ID}",
+        "TenantId": "${TENANT_ID}",
+        "Instance": "https://login.microsoftonline.com/",
+        "Domain": "${AAD_DOMAIN}",
+        "ValidateAuthority": true,
+        "RedirectUri": "${WEB_APP_URL}/authentication/login-callback",
+        "PostLogoutRedirectUri": "${WEB_APP_URL}/",
+        "DefaultScopes": ["openid", "profile", "email", "api://${API_SCOPE}/user_impersonation"],
+        "ResponseType": "id_token token",
+        "ResponseMode": "fragment"
+      },
+      "Logging": {
+        "LogLevel": {
+          "Default": "Information",
+          "Microsoft": "Warning",
+          "Microsoft.Hosting.Lifetime": "Information"
+        },
+        "EnableConsoleLogging": true,
+        "EnableApplicationInsights": ${ENABLE_APP_INSIGHTS},
+        "ApplicationInsightsConnectionString": "${APP_INSIGHTS_CONNECTION_STRING}"
+      },
+      "ApplicationInsights": {
+        "ConnectionString": "${APP_INSIGHTS_CONNECTION_STRING}",
+        "EnableAdaptiveSampling": true,
+        "EnablePerformanceCounterCollectionModule": true,
+        "EnableQuickPulseMetricStream": true,
+        "EnableHeartbeat": true
+      },
+      "LocalStorage": {
+        "TokenKey": "auth_token",
+        "UserKey": "user_data",
+        "SettingsKey": "user_settings",
+        "CalculationHistoryKey": "calculation_history",
+        "MaxStorageItems": 50,
+        "ExpirationDays": 30
+      },
+      "FeatureManagement": {
+        "OcrDocumentProcessing": ${ENABLE_OCR_PROCESSING},
+        "ErpIntegration": ${ENABLE_ERP_INTEGRATION},
+        "AdvancedReporting": ${ENABLE_ADVANCED_REPORTING},
+        "MultiCountryCalculation": true,
+        "DarkMode": true,
+        "ExportToExcel": true,
+        "ExportToPdf": true,
+        "SaveCalculations": true,
+        "CompareCalculations": true
+      },
+      "UIConfiguration": {
+        "DefaultTheme": "light",
+        "EnableAnimations": true,
+        "DefaultCurrency": "EUR",
+        "DefaultLanguage": "en",
+        "SupportedLanguages": ["en", "de", "fr", "es", "it"],
+        "DateFormat": "yyyy-MM-dd",
+        "TimeFormat": "HH:mm",
+        "NumberFormat": {
+          "DecimalSeparator": ".",
+          "ThousandsSeparator": ",",
+          "DecimalPlaces": 2
+        },
+        "PageSize": 10,
+        "MaxRecentItems": 5,
+        "SessionTimeoutMinutes": 30,
+        "IdleWarningMinutes": 25
+      },
+      "ErrorHandling": {
+        "ShowDetailedErrors": ${SHOW_DETAILED_ERRORS},
+        "LogClientErrors": true,
+        "EnableErrorReporting": true,
+        "ErrorReportingEndpoint": "/api/errors/report"
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vatfilingpricingtool-nginx-config
+  namespace: vatfilingpricingtool
+  labels:
+    app: vatfilingpricingtool
+    component: web
+    part-of: vatfilingpricingtool
+    managed-by: kubectl
+  annotations:
+    description: "Nginx configuration for the VAT Filing Pricing Tool Web UI"
+    last-updated: "${CURRENT_DATE}"
+data:
+  nginx.conf: |
+    user nginx;
+    worker_processes auto;
+
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+
+    events {
+        worker_connections 1024;
+        multi_accept on;
+    }
+
+    http {
+        include mime.types;
+        default_type application/octet-stream;
+
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" "$http_x_forwarded_for"';
+        access_log /var/log/nginx/access.log main;
+
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+        types_hash_max_size 2048;
+        server_tokens off;
+        client_max_body_size 10m;
+
+        # Compression settings
+        gzip on;
+        gzip_disable "msie6";
+        gzip_vary on;
+        gzip_proxied any;
+        gzip_comp_level 6;
+        gzip_buffers 16 8k;
+        gzip_http_version 1.1;
+        gzip_min_length 256;
+        gzip_types
+            text/plain
+            text/css
+            application/json
+            application/javascript
+            text/xml
+            application/xml
+            application/xml+rss
+            text/javascript
+            application/wasm;
+
+        server {
+            listen 80;
+            server_name _;
+            root /usr/share/nginx/html;
+            index index.html;
+
+            # SPA routing
+            location / {
+                try_files $uri $uri/ /index.html =404;
+            }
+
+            # Static assets caching
+            location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+                expires 30d;
+                add_header Cache-Control "public, max-age=2592000";
+                add_header Vary Accept-Encoding;
+                access_log off;
+            }
+
+            # HTML, JSON, and WASM files should not be cached
+            location ~* \.(html|json|wasm)$ {
+                expires -1;
+                add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0";
+                add_header Pragma "no-cache";
+            }
+
+            # Health check endpoint
+            location /health {
+                access_log off;
+                add_header Content-Type text/plain;
+                return 200 'healthy';
+            }
+
+            # API proxy
+            location /api/ {
+                proxy_pass ${API_BASE_URL}/api/;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection 'upgrade';
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_cache_bypass $http_upgrade;
+            }
+
+            # Security headers
+            add_header X-Content-Type-Options nosniff;
+            add_header X-Frame-Options SAMEORIGIN;
+            add_header X-XSS-Protection "1; mode=block";
+            add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://login.microsoftonline.com https://*.msftauth.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.microsoft.com; font-src 'self'; connect-src 'self' https://*.microsoft.com https://*.microsoftonline.com https://*.msftauth.net ${API_BASE_URL}; frame-src 'self' https://login.microsoftonline.com https://*.msftauth.net; object-src 'none'";
+            add_header Referrer-Policy 'strict-origin-when-cross-origin';
+        }
+    }
