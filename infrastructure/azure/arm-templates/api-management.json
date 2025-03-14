@@ -1,0 +1,282 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "apiManagementName": {
+            "type": "string",
+            "metadata": {
+                "description": "Name of the API Management service"
+            }
+        },
+        "location": {
+            "type": "string",
+            "metadata": {
+                "description": "Location for the API Management service"
+            }
+        },
+        "sku": {
+            "type": "string",
+            "allowedValues": [
+                "Developer",
+                "Basic",
+                "Standard",
+                "Premium"
+            ],
+            "defaultValue": "Standard",
+            "metadata": {
+                "description": "The pricing tier of this API Management service"
+            }
+        },
+        "capacity": {
+            "type": "int",
+            "defaultValue": 1,
+            "minValue": 1,
+            "maxValue": 10,
+            "metadata": {
+                "description": "The number of deployed units of the SKU"
+            }
+        },
+        "publisherEmail": {
+            "type": "string",
+            "metadata": {
+                "description": "The email address of the owner of the service"
+            }
+        },
+        "publisherName": {
+            "type": "string",
+            "metadata": {
+                "description": "The name of the owner of the service"
+            }
+        },
+        "virtualNetworkType": {
+            "type": "string",
+            "allowedValues": [
+                "None",
+                "External",
+                "Internal"
+            ],
+            "defaultValue": "External",
+            "metadata": {
+                "description": "The type of VNet integration: None (default), External (gateway component in VNet), or Internal (fully in VNet)"
+            }
+        },
+        "logAnalyticsWorkspaceId": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Resource ID of the Log Analytics workspace for diagnostics settings"
+            }
+        },
+        "tags": {
+            "type": "object",
+            "defaultValue": {},
+            "metadata": {
+                "description": "Resource tags"
+            }
+        }
+    },
+    "variables": {
+        "apiManagementServiceId": "[resourceId('Microsoft.ApiManagement/service', parameters('apiManagementName'))]",
+        "diagnosticsSettingsName": "[concat(parameters('apiManagementName'), '-diagnostics')]",
+        "apiManagementUrl": "[concat('https://', parameters('apiManagementName'), '.azure-api.net')]",
+        "portalUrl": "[concat('https://', parameters('apiManagementName'), '.developer.azure-api.net')]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.ApiManagement/service",
+            "apiVersion": "2021-08-01",
+            "name": "[parameters('apiManagementName')]",
+            "location": "[parameters('location')]",
+            "sku": {
+                "name": "[parameters('sku')]",
+                "capacity": "[parameters('capacity')]"
+            },
+            "properties": {
+                "publisherEmail": "[parameters('publisherEmail')]",
+                "publisherName": "[parameters('publisherName')]",
+                "virtualNetworkType": "[parameters('virtualNetworkType')]",
+                "publicNetworkAccess": "Enabled",
+                "disableGateway": false
+            },
+            "tags": "[parameters('tags')]",
+            "identity": {
+                "type": "SystemAssigned"
+            }
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/products",
+            "apiVersion": "2021-08-01",
+            "name": "[concat(parameters('apiManagementName'), '/standard')]",
+            "dependsOn": [
+                "[variables('apiManagementServiceId')]"
+            ],
+            "properties": {
+                "displayName": "Standard",
+                "description": "Standard tier with 100 calls per minute rate limit",
+                "subscriptionRequired": true,
+                "approvalRequired": false,
+                "state": "published",
+                "terms": "These are the terms of use for the Standard API product."
+            }
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/products",
+            "apiVersion": "2021-08-01",
+            "name": "[concat(parameters('apiManagementName'), '/premium')]",
+            "dependsOn": [
+                "[variables('apiManagementServiceId')]"
+            ],
+            "properties": {
+                "displayName": "Premium",
+                "description": "Premium tier with 300 calls per minute rate limit",
+                "subscriptionRequired": true,
+                "approvalRequired": false,
+                "state": "published",
+                "terms": "These are the terms of use for the Premium API product."
+            }
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/products",
+            "apiVersion": "2021-08-01",
+            "name": "[concat(parameters('apiManagementName'), '/partner')]",
+            "dependsOn": [
+                "[variables('apiManagementServiceId')]"
+            ],
+            "properties": {
+                "displayName": "Partner",
+                "description": "Partner tier with 500 calls per minute rate limit",
+                "subscriptionRequired": true,
+                "approvalRequired": true,
+                "state": "published",
+                "terms": "These are the terms of use for the Partner API product."
+            }
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/products",
+            "apiVersion": "2021-08-01",
+            "name": "[concat(parameters('apiManagementName'), '/internal')]",
+            "dependsOn": [
+                "[variables('apiManagementServiceId')]"
+            ],
+            "properties": {
+                "displayName": "Internal",
+                "description": "Internal tier with 1000 calls per minute rate limit for system-to-system communication",
+                "subscriptionRequired": true,
+                "approvalRequired": true,
+                "state": "published",
+                "terms": "These are the terms of use for the Internal API product."
+            }
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/policies",
+            "apiVersion": "2021-08-01",
+            "name": "[concat(parameters('apiManagementName'), '/policy')]",
+            "dependsOn": [
+                "[variables('apiManagementServiceId')]"
+            ],
+            "properties": {
+                "format": "xml",
+                "value": "<policies>\r\n  <inbound>\r\n    <cors>\r\n      <allowed-origins>\r\n        <origin>https://vatfilingpricingtool.com</origin>\r\n        <origin>https://*.vatfilingpricingtool.com</origin>\r\n      </allowed-origins>\r\n      <allowed-methods>\r\n        <method>GET</method>\r\n        <method>POST</method>\r\n        <method>PUT</method>\r\n        <method>DELETE</method>\r\n        <method>OPTIONS</method>\r\n      </allowed-methods>\r\n      <allowed-headers>\r\n        <header>Content-Type</header>\r\n        <header>Authorization</header>\r\n        <header>X-Requested-With</header>\r\n      </allowed-headers>\r\n      <expose-headers>\r\n        <header>*</header>\r\n      </expose-headers>\r\n    </cors>\r\n    <set-header name=\"X-Content-Type-Options\" exists-action=\"override\">\r\n      <value>nosniff</value>\r\n    </set-header>\r\n    <set-header name=\"Strict-Transport-Security\" exists-action=\"override\">\r\n      <value>max-age=31536000; includeSubDomains</value>\r\n    </set-header>\r\n    <set-header name=\"X-Frame-Options\" exists-action=\"override\">\r\n      <value>DENY</value>\r\n    </set-header>\r\n    <set-header name=\"X-XSS-Protection\" exists-action=\"override\">\r\n      <value>1; mode=block</value>\r\n    </set-header>\r\n  </inbound>\r\n  <backend>\r\n    <forward-request />\r\n  </backend>\r\n  <outbound>\r\n    <set-header name=\"X-Powered-By\" exists-action=\"delete\" />\r\n    <set-header name=\"X-AspNet-Version\" exists-action=\"delete\" />\r\n    <set-header name=\"Server\" exists-action=\"delete\" />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>"
+            }
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/products/policies",
+            "apiVersion": "2021-08-01",
+            "name": "[concat(parameters('apiManagementName'), '/standard/policy')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/products', parameters('apiManagementName'), 'standard')]"
+            ],
+            "properties": {
+                "format": "xml",
+                "value": "<policies>\r\n  <inbound>\r\n    <rate-limit calls=\"100\" renewal-period=\"60\" />\r\n    <quota calls=\"10000\" renewal-period=\"86400\" />\r\n    <base />\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>"
+            }
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/products/policies",
+            "apiVersion": "2021-08-01",
+            "name": "[concat(parameters('apiManagementName'), '/premium/policy')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/products', parameters('apiManagementName'), 'premium')]"
+            ],
+            "properties": {
+                "format": "xml",
+                "value": "<policies>\r\n  <inbound>\r\n    <rate-limit calls=\"300\" renewal-period=\"60\" />\r\n    <quota calls=\"30000\" renewal-period=\"86400\" />\r\n    <base />\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>"
+            }
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/products/policies",
+            "apiVersion": "2021-08-01",
+            "name": "[concat(parameters('apiManagementName'), '/partner/policy')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/products', parameters('apiManagementName'), 'partner')]"
+            ],
+            "properties": {
+                "format": "xml",
+                "value": "<policies>\r\n  <inbound>\r\n    <rate-limit calls=\"500\" renewal-period=\"60\" />\r\n    <quota calls=\"50000\" renewal-period=\"86400\" />\r\n    <base />\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>"
+            }
+        },
+        {
+            "type": "Microsoft.ApiManagement/service/products/policies",
+            "apiVersion": "2021-08-01",
+            "name": "[concat(parameters('apiManagementName'), '/internal/policy')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/products', parameters('apiManagementName'), 'internal')]"
+            ],
+            "properties": {
+                "format": "xml",
+                "value": "<policies>\r\n  <inbound>\r\n    <rate-limit calls=\"1000\" renewal-period=\"60\" />\r\n    <quota calls=\"100000\" renewal-period=\"86400\" />\r\n    <base />\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>"
+            }
+        },
+        {
+            "condition": "[not(empty(parameters('logAnalyticsWorkspaceId')))]",
+            "type": "Microsoft.Insights/diagnosticSettings",
+            "apiVersion": "2021-05-01-preview",
+            "name": "[variables('diagnosticsSettingsName')]",
+            "dependsOn": [
+                "[variables('apiManagementServiceId')]"
+            ],
+            "properties": {
+                "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                "logs": [
+                    {
+                        "category": "GatewayLogs",
+                        "enabled": true,
+                        "retentionPolicy": {
+                            "days": 30,
+                            "enabled": true
+                        }
+                    },
+                    {
+                        "category": "WebSocketConnectionLogs",
+                        "enabled": true,
+                        "retentionPolicy": {
+                            "days": 30,
+                            "enabled": true
+                        }
+                    }
+                ],
+                "metrics": [
+                    {
+                        "category": "AllMetrics",
+                        "enabled": true,
+                        "retentionPolicy": {
+                            "days": 30,
+                            "enabled": true
+                        }
+                    }
+                ]
+            },
+            "scope": "[variables('apiManagementServiceId')]"
+        }
+    ],
+    "outputs": {
+        "apiManagementUrl": {
+            "type": "string",
+            "value": "[variables('apiManagementUrl')]"
+        },
+        "portalUrl": {
+            "type": "string",
+            "value": "[variables('portalUrl')]"
+        }
+    }
+}
