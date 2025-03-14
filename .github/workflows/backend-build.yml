@@ -1,0 +1,169 @@
+name: Backend Build and Test
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/backend/**'
+      - '.github/workflows/backend-build.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'src/backend/**'
+      - '.github/workflows/backend-build.yml'
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: '6.0.x'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  SOLUTION_FILE: 'src/backend/VatFilingPricingTool.sln'
+  BUILD_CONFIGURATION: 'Release'
+  ACR_NAME: 'vatfilingpricingtoolacr'
+  IMAGE_NAME: 'vatfilingpricingtool-backend'
+  CODE_COVERAGE_THRESHOLD: '80'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Needed for SonarCloud analysis
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ env.SOLUTION_FILE }}
+
+      - name: Build solution
+        run: dotnet build ${{ env.SOLUTION_FILE }} --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore
+
+      - name: Run unit tests
+        run: dotnet test src/backend/Tests/VatFilingPricingTool.UnitTests/VatFilingPricingTool.UnitTests.csproj --configuration ${{ env.BUILD_CONFIGURATION }} --no-build --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./coverage --logger trx
+
+      - name: Run integration tests
+        run: dotnet test src/backend/Tests/VatFilingPricingTool.IntegrationTests/VatFilingPricingTool.IntegrationTests.csproj --configuration ${{ env.BUILD_CONFIGURATION }} --no-build --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./coverage --logger trx
+
+      - name: Generate code coverage report
+        run: dotnet tool install -g dotnet-reportgenerator-globaltool && reportgenerator -reports:./coverage/**/coverage.cobertura.xml -targetdir:./coverage/report -reporttypes:HtmlInline_AzurePipelines,Cobertura
+
+      - name: Check code coverage threshold
+        run: bash -c "coverage=$(grep -o 'line-rate=\"[0-9]\+\.[0-9]\+\"' ./coverage/**/coverage.cobertura.xml | head -1 | grep -o '[0-9]\+\.[0-9]\+' | awk '{print $1 * 100}'); echo \"Code coverage: $coverage%\"; if (( $(echo \"$coverage < ${{ env.CODE_COVERAGE_THRESHOLD }}\" | bc -l) )); then echo \"Code coverage is below threshold of ${{ env.CODE_COVERAGE_THRESHOLD }}%\"; exit 1; fi"
+
+      - name: SonarCloud Scan
+        uses: sonarsource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: src/backend
+          args: -Dsonar.projectKey=VatFilingPricingTool_Backend -Dsonar.organization=vatfilingpricingtool -Dsonar.cs.opencover.reportsPaths=../../coverage/**/coverage.opencover.xml -Dsonar.cs.vstest.reportsPaths=../../coverage/*.trx
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: ./coverage/*.trx
+          retention-days: 7
+        if: always()
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: ./coverage/report
+          retention-days: 7
+
+      - name: Publish API project
+        run: dotnet publish src/backend/VatFilingPricingTool.Api/VatFilingPricingTool.Api.csproj --configuration ${{ env.BUILD_CONFIGURATION }} --no-build --output ./publish
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: backend-build
+          path: ./publish
+          retention-days: 7
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to Azure Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.ACR_NAME }}.azurecr.io
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Extract branch name
+        shell: bash
+        run: echo "BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_ENV
+
+      - name: Extract commit SHA
+        shell: bash
+        run: echo "COMMIT_SHA=$(echo ${GITHUB_SHA} | cut -c1-8)" >> $GITHUB_ENV
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: src/backend
+          file: src/backend/Dockerfile
+          push: true
+          tags: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.BRANCH_NAME }}-${{ env.COMMIT_SHA }},${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.BRANCH_NAME }}-latest
+          cache-from: type=registry,ref=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+  security_scan:
+    runs-on: ubuntu-latest
+    needs: [docker]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Extract branch name
+        shell: bash
+        run: echo "BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_ENV
+
+      - name: Extract commit SHA
+        shell: bash
+        run: echo "COMMIT_SHA=$(echo ${GITHUB_SHA} | cut -c1-8)" >> $GITHUB_ENV
+
+      - name: Install Trivy
+        run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.38.0
+
+      - name: Login to Azure Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.ACR_NAME }}.azurecr.io
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Scan Docker image
+        run: trivy image --format sarif --output trivy-results.sarif ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ env.BRANCH_NAME }}-${{ env.COMMIT_SHA }}
+
+      - name: Upload Trivy scan results
+        uses: actions/upload-artifact@v3
+        with:
+          name: trivy-results
+          path: trivy-results.sarif
+          retention-days: 7
